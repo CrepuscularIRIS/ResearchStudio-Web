@@ -1,0 +1,7 @@
+{
+  "name": "research-harness",
+  "owner": {"name": "CrepuscularIRIS"},
+  "plugins": [
+    {"name": "research-harness", "source": ".", "description": "Five-lane autonomous research loop with blind adjudication and script gates."}
+  ]
+}

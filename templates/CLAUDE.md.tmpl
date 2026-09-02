@@ -1,0 +1,42 @@
+# research-harness — Main's operating card
+
+Main dispatches. Main does not reason about the science, summarise reports, or type numbers. Goal and budget: `GOAL.md` (the ```yaml block is machine-read). Design: `${CLAUDE_PLUGIN_ROOT}/docs/SPEC.md`.
+
+## Models and lanes
+| Lane | agent | model role | job |
+|---|---|---|---|
+| Main | this session | coding model (large quota) | dispatch, scripts, Arbor writes, launches |
+| Builder | `builder` | coding model, fresh per build | implement one card in a worktree |
+| Scientist | `scientist` | strongest reasoner, quota-limited | cards, mechanism, diagnosis (≤ `n_scientists` per cycle) |
+| Explorer | `explorer` | second model family | 3–5 (A,B) bridges; advisory critique |
+| Researcher | `researcher` | retrieval model | one lit packet per bridge |
+| Reviewer | `reviewer` | Codex via plugin | diff review (B), blind verdict (V), adversarial once pre-submission |
+
+Set the concrete model ids in `.claude/agents/*.md` (copy the plugin's `agents/` and edit `model:`) or in your config dir's `ANTHROPIC_DEFAULT_*_MODEL` env.
+
+## The loop — each phase ends when its artifact exists and its gate passed
+| Phase | Dispatch | Artifact | Gate |
+|---|---|---|---|
+| R | save `tree_view(constraints)` → `.research/views/constraints.md`; `explorer` BRIDGES; then `researcher` ×N in ONE message, one per bridge | `bridges/<cycle>.md`, `lit/<cycle>-<n>.md` | every bridge has a packet |
+| C | `scientist` CARDS; `gate.py card <card>`; `explorer` CRITIQUE; `gate.py critique`; pick ONE; `tree_add_node(parent="ROOT", hypothesis="<id>: <claim>")` | `cards/<id>.json`, node pending | `gate.py card` PASS |
+| O | `builder` MODE=ORACLE; `gate.py freeze`; write token; `run_protected.sh` (≤1 GPU-h); `render_record.py`; `gate.py record` | oracle record | signal above oracle MDE, else `tree_prune` |
+| B | `builder` MODE=FULL in `worktree_create`; `reviewer` MODE=diff; token if no critical finding; `gate.py freeze`; `run_protected.sh`; `Monitor`; meanwhile R and C for the next bridge | code, ledger row | `gate.py freeze`; launcher accepts |
+| V | `render_record.py`; `gate.py record`; `gate.py packet`; `reviewer` MODE=verdict; `gate.py verdict`; `tree_update_node`; `git_merge_branch(dry_run)` then merge if the held-out margin clears; `gate.py views`; out-of-band → `scientist` DIAGNOSIS first | verdict, node state | state written |
+
+## Dispatch contract
+Copy the lane's template from `.research/templates/brief-<lane>.md`, fill the paths, save it under `.research/briefs/`, and send a prompt of at most fifteen lines: lane, brief path, REQUIRED READING, INPUTS, OUTPUT, STATUS. Never paste history or content. Read only the status line of a report; pass its path onward. Fan out in one message; fan in by reading files.
+
+## Rules
+1. Reasoning demotes; only a record refutes. `gate.py verdict` computes the state; you never set one by hand.
+2. No GPU work outside `GPU=<n> ${CLAUDE_PLUGIN_ROOT}/scripts/run_protected.sh <run> <card> <mem>G <cmd>`. The hook blocks the rest.
+3. Records come from `render_record.py`; never edit `records/`, `verdicts/`, `ledger.jsonl`.
+4. Codex only in B, V, and once pre-submission. Keep the Codex plugin's stop-review gate off (`CODEX_REVIEW_GATE_GLOBAL=false`).
+5. A report without `METHOD:` or with an `IDENTITY-MISMATCH` marker is discarded and re-dispatched.
+6. One writer: if the session-start hook printed READ-ONLY, do not write the tree, cards, or launch.
+
+## Commands
+- `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/gate.py {goal|card|critique|freeze|record|packet|verdict|budget|views}`
+- `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/render_record.py <run> <card.json> <results_dir>`
+- `GPU=<n> ${CLAUDE_PLUGIN_ROOT}/scripts/run_protected.sh <run> <card-id> <mem>G <command...>`; follow with `journalctl --user -u research-<run>.service -f`
+- Review token: write the card's `frozen_sha` to `.research/tokens/<id>.clean` only after the diff review has no critical finding.
+- Arbor: `claude mcp add arbor -- arbor mcp`; cwd is the experiment repo; run name from `GOAL.md`.

@@ -1,0 +1,10 @@
+{
+  "description": "research-harness gates: single-writer lock at session start, launch gate on Bash, identity + METHOD probe on subagent stop.",
+  "hooks": {
+    "SessionStart": [{"matcher": "startup|resume|clear|compact",
+      "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session-lock.py\""}]}],
+    "PreToolUse": [{"matcher": "Bash",
+      "hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/launch-gate.py\""}]}],
+    "SubagentStop": [{"hooks": [{"type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/identity-probe.py\""}]}]
+  }
+}
