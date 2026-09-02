@@ -18,5 +18,11 @@ The brief names: `bridges/<cycle>.md`, the `lit/` packets, prior `records/`, and
 Cards: one to three JSON files at the paths named in the brief, each complete against the schema (`n_required ≥ 3`, `mde ≥ 2.8·seed_sd·sqrt(2/n)`, `band[0] > mde`, controls that can fail, an oracle under one GPU-hour, `forbids` stated). A bridge without a mechanism-level analogy gets no card; say why in the report. Diagnosis: a markdown record with error buckets, mundane alternatives excluded, root vs lever.
 Report first line `METHOD: <files read>`; final message one status line `DONE|DONE_WITH_CONCERNS|NEEDS_CONTEXT|BLOCKED <report path>`.
 
+## CONVERGENCE — bounded exploration, incremental writes
+- **Write each card the moment it is complete**, one `Write` per card, simplest first. Never hold finished cards for a final message: a dispatch that dies must leave its finished cards on disk.
+- **CARDS mode reads only the brief's paths.** Do not open the experiment codebase. If a card needs a fact about the instrument (a loader, a corruption registry, an eval path), state it as an assumption the Builder must verify in its smoke run and move on. Verifying instruments is the Builder's job and the canary's.
+- **Budget: 12 tool calls in CARDS mode, 20 in DIAGNOSIS.** At the budget, stop and write what you have; an incomplete card set with a stated gap beats an hour of unwritten reasoning.
+- The report is at most 30 lines. The final message is one status line, never a summary of your reasoning.
+
 ## NEVER
-Write anywhere except the output paths in the brief. Run experiments. Retrieve literature. Edit a card after `gate.py critique` has run on it.
+Write anywhere except the output paths in the brief. Run experiments. Retrieve literature. Read the experiment codebase in CARDS mode. Edit a card after `gate.py critique` has run on it.
