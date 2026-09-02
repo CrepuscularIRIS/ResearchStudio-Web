@@ -3,7 +3,7 @@
 Start the campaign session from the workspace:
 
 ```bash
-cd  && cd <project> && CLAUDE_CONFIG_DIR=<your-campaign-config-dir> claude
+cd <project> && CLAUDE_CONFIG_DIR=<your-campaign-config-dir> claude
 ```
 
 The session-start hook must print nothing about READ-ONLY. If it does, another session holds `.research/LOCK`; close it first.
