@@ -159,10 +159,16 @@ def _repo_files(limit: int = 80) -> list[str]:
         return []
     skip = ("papers/", "results/", "docs/", ".grill/", "cache/", "experiments/", "archive/", "logs/", "notebooks/", "tests/")
     files = [l for l in out.splitlines() if re.search(r"\.(py|yaml|yml|sh)$", l) and not l.startswith(skip) and "/__pycache__/" not in l]
-    files.sort(key=lambda l: (0 if l.startswith(("scripts/", "repos/", "models/", "src/", "tools/", "configs/")) else 1, l))
-    if len(files) > limit:
-        return files[:limit] + [f"... {len(files) - limit} more tracked files omitted (ask by directory: the builder can ls the worktree)"]
-    return files
+    files.sort(key=lambda l: (0 if l.startswith(("scripts/", "models/", "src/", "tools/", "configs/")) else 1, l))
+    out_l, per_dir, cap_dir = [], {}, 20
+    for l in files:
+        top = "/".join(l.split("/")[:2]) if l.startswith("models/") else l.split("/")[0]
+        per_dir[top] = per_dir.get(top, 0) + 1
+        if per_dir[top] <= cap_dir:
+            out_l.append(l)
+    omitted = {d: n - cap_dir for d, n in per_dir.items() if n > cap_dir}
+    out_l = out_l[:limit] + [f"... {n} more files under {d}/ (the builder can ls the worktree)" for d, n in sorted(omitted.items())]
+    return out_l
 
 
 def _protected() -> list[str]:
@@ -403,7 +409,8 @@ def cmd_spec(chain: str, retry: bool = False, rung: str | None = None) -> dict:
               "claim": _claim_core(), "chain_history": _chain_history(chain) or [NO_HISTORY],
               "numbers": {"kill_threshold": stage.kill_threshold(recs, c), "keep_gain": c.get("keep_gain"), "clean_cost_max": c.get("clean_cost_max"),
                           "gpu_h_cap": c.get("kill_gpu_h_cap", 4), "held_out": c.get("held_out"), "networks": c.get("networks")},
-              "avoid": _avoid_list(), "repo_files": _repo_files(), "result_contract": RESULT_CONTRACT}
+              "avoid": _avoid_list(), "repo_files": _repo_files(), "result_contract": RESULT_CONTRACT,
+              "models": stage._json(_repo() / "models" / "VENDORED.json") or None}
     ladder = stage.support_rungs(stage.load_claim(W) or {}, HERE)
     rung_obj = next((x for x in ladder["rungs"] if x["id"] == rung), None) if rung else None
     if rung and not rung_obj:
@@ -440,6 +447,7 @@ def cmd_spec(chain: str, retry: bool = False, rung: str | None = None) -> dict:
             "7. rationale_line 一句：约束是哪个失败模式 B；parent（若有）没成的原因见 parent.record / blockers / monitor，这版改的就是那个原因（先诊断再迭代）。",
             "8. method_prose：6–12 句论文级方法描述，写在任何结果之前，不含数字、不含结果、不含比较词；它随 card 冻结，论文方法节只从它生成。",
             "9. 与 chain_history、tried、AVOID 里任何一条步骤相同的规格不算候选（脚本按步骤指纹拒收）。",
+            "10. 模型代码只用 models/<name>/（官方原版，见 bundle.models 的 url/commit）；repos/ 下的旧副本是 gitlink，看不见、改不了、不许引用。官方代码已知的坑（AVOID 里的 optimizer 分组、死 flag 等）要在 steps 里显式处理，不能假设已修。",
             f"incumbent（{cfg.get('seed_method')}）是论文现成的对照，不是候选。配方是方向，不是实现指令。",
         ])
     task += f" 把规格 JSON 写到 {spec_path}，再返回它。"
@@ -655,7 +663,8 @@ def cmd_write() -> dict:
                      {"files": sections, "manuscript_rules": rules_txt},
                      {"written": ""}, tools_note="可以 Read/Write 这两个文件；不搜索。")
     review = _prompt("终审：逐个数字对照其 `% src:` record 文件；任何数字与 record 不符、任何缺 src 的数字、任何 manuscript_rules 禁写项 → block。"
-                     "选择性叙事（ARFT E.2）也 block：board 里每个被 kill / 没刷新最好成绩的候选都必须在负结果讨论里出现；只报成功的稿子不通过。每个 claim 句必须能指到一条证据（issues 里列出没有证据的句子）；CLAIM.md 文献核对表里标为“必须讨论”的对照没出现在 related work 也 block。返回 {\"verdict\": \"pass|block\", \"issues\": [\"file:line — why\"]}。",
+                     "选择性叙事（ARFT E.2）也 block：board 里每个被 kill / 没刷新最好成绩的候选都必须在负结果讨论里出现；只报成功的稿子不通过。每个 claim 句必须能指到一条证据（issues 里列出没有证据的句子）；CLAIM.md 文献核对表里标为“必须讨论”的对照没出现在 related work 也 block。"
+                     "register（manuscript_rules 里的写法规则：破折号预算、禁用词、二元对比上限、人称）由你逐条核对并列进 issues；register 问题单独标 `style:`，只有 style 问题时 verdict 仍是 pass，其它问题 block。返回 {\"verdict\": \"pass|block\", \"issues\": [\"file:line — why\"]}。",
                      {"files": sections, "records_dir": str(HERE / "records"), "manuscript_rules": rules_txt, "board": stage.board(W, HERE),
                       "run_dirs": [str(stage.results_dir(stage._json(HERE / "cards" / f"{k['card']}.json"), k["run"])) for k in keeps],
                       "method_prose": {k: (v or {}).get("method_prose") for k, v in specs.items()},
