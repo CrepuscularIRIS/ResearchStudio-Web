@@ -26,7 +26,10 @@ def good_spec():
             "conditions": ["complete", "depth-missing", "amplitude class"], "schedule": {"gpu_h": 2.0},
             "kill_cmd": "python scripts/train.py --out $RESULTS_DIR --seed $SEED", "canary": {"what": "clean mIoU", "expected": 55.7, "tol": 0.3},
             "rationale_line": "the binding failure mode is B1 (operator corruption); C2 attenuation failed via clean cost; this spec attacks it by zero-init injection",
-            "naive_baseline": "the same conditions with the original ConD three-condition sampler and no ladder classes"}
+            "naive_baseline": "the same conditions with the original ConD three-condition sampler and no ladder classes", "source": "S1",
+            "method_prose": "We keep the original network frozen and copy its encoder. A zero-initialised injection head reads the copied features and adds them to the frozen stream. "
+                            "Training samples one input condition per step from the audited ladder classes while the held-out class never appears. The source mechanism predicts that "
+                            "reweighting by an estimate of contamination transfers to unseen corruption classes. The disanalogy forced us to estimate contamination from the input rather than from labels."}
 
 
 def test_spec_gate_passes_a_b1_spec_and_rejects_b2(tmp_path):
@@ -138,6 +141,10 @@ def test_numbers_gate(tmp_path):
     assert any("not a number token" in f for f in gate.check_numbers("Gain is 9.99 mIoU. % src: .research/records/Q-0001-alpha.json\n", rdir))
     assert any("retracted" in f for f in gate.check_numbers("a sixfold gap % src: .research/records/Q-0001-alpha.json\n", rdir))
     assert gate.check_numbers("\\label{tab:1.2}\n", rdir) == []
+    (rdir / "records" / "Q-0002-alpha.json").write_text(json.dumps({"mean": 11.052, "ci95": [10.5, 11.6]}))
+    assert any("not a number token" in f for f in gate.check_numbers("Gain 1.05 % src: .research/records/Q-0002-alpha.json\n", rdir)), \
+        "a digit-substring of another number (1.05 inside 11.052) is not a source (ARIS: numeric-token equality)"
+    assert gate.check_numbers("Gain 11.0520 % src: .research/records/Q-0002-alpha.json\n", rdir) == [], "73.2 matches 73.20"
 
 
 def test_record_gate_refuses_high_blockers(tmp_path):
@@ -182,3 +189,44 @@ def test_spec_gate_eval_entry(tmp_path):
     assert any("shared eval entrypoint" in x for x in f)
     spec["kill_cmd"] += " && python tools/score.py $RESULTS_DIR"
     assert not any("shared eval entrypoint" in x for x in gate.check_spec(spec, claim, rp, 4))
+
+
+def test_numbers_gate_sources_only_result_fields(tmp_path):
+    rdir = tmp_path / ".research"; (rdir / "records").mkdir(parents=True); (rdir / "retracted.txt").write_text("")
+    (rdir / "records" / "Q-0001-alpha.json").write_text(json.dumps({"mean": 1.42, "ci95": [0.9, 1.9], "per_seed": {"0": 1.31}, "cost_gpu_h": 3.912, "band": [1.0, 99.0], "n_realized": 3}))
+    (rdir / "records" / "Q-0001-alpha.md").write_text("band [1.0, 99.0] cost=3.912 GPU-h mean 1.42\n")
+    ok = "% src: .research/records/Q-0001-alpha.md"
+    assert gate.check_numbers(f"Gain 1.42 {ok}\n", rdir) == [], "the .md resolves to its .json result fields"
+    assert any("not a number token" in f for f in gate.check_numbers(f"We reach 99.0 mIoU {ok}\n", rdir)), "a band ceiling printed in the record is not a result"
+    assert any("not a number token" in f for f in gate.check_numbers(f"a gain of 3.912 {ok}\n", rdir)), "GPU-hours cannot source a gain"
+    assert any("without" in f for f in gate.check_numbers("over 3 seeds on 2 networks\n", rdir)), "scope integers need a source"
+    (tmp_path / "CLAIM.md").write_text("```yaml\nclaim:\n  seeds_for_keep: 3\n  keep_networks: 2\n```\n")
+    assert gate.check_numbers("over 3 seeds on 2 networks % src: CLAIM.md\n", rdir) == []
+
+
+def test_spec_gate_hygiene_and_source(tmp_path):
+    rp = repo(tmp_path); spec = good_spec()
+    spec["kill_cmd"] = "pip install x && python /home/me/train.py --out $RESULTS_DIR --seed $SEED"
+    f = gate.check_spec(spec, CLAIM, rp, 4.0); assert any("kill_cmd: no package installs" in x for x in f)
+    spec = good_spec(); spec["method_prose"] = spec["method_prose"] + " It outperforms the baseline by 2.3 mIoU."
+    assert any("method_prose: no numbers" in x for x in gate.check_spec(spec, CLAIM, rp, 4.0))
+    rdir = tmp_path / ".research"; (rdir / "bundles").mkdir(parents=True, exist_ok=True)
+    (rdir / "mechanism-map.json").write_text(json.dumps({"sources": [{"id": "S1", "status": "open"}, {"id": "S2", "status": "exhausted", "no_improve": 2}]}))
+    (rdir / "bundles" / "args-spec-Q-0001-alpha.json").write_text(json.dumps({"mode": "mechanism"}))
+    (tmp_path / "GOAL.md").write_text("```yaml\ncampaign:\n  repo_root: repo\n```\n")
+    (tmp_path / "CLAIM.md").write_text("```yaml\nclaim:\n  held_out: 'structured interference class'\n  networks: [NetA, NetB]\n  kill_gpu_h_cap: 4\n```\n")
+    spec = good_spec(); spec["source"] = "S2"
+    (rdir / "bundles" / "spec-Q-0001-alpha.json").write_text(json.dumps(spec))
+    assert gate.gate_spec("Q-0001-alpha", rdir) == 1
+    fails = json.loads((rdir / "gates" / "Q-0001-alpha.spec.fail.json").read_text())["fails"]
+    assert any("not an eligible mechanism-map source" in x for x in fails), "an exhausted source never runs again"
+    spec["source"] = "S1"; (rdir / "bundles" / "spec-Q-0001-alpha.json").write_text(json.dumps(spec))
+    assert gate.gate_spec("Q-0001-alpha", rdir) == 0
+
+
+def test_monitor_gate_refuses_gitlinks_and_hidden_codex_findings():
+    diff = "diff --git a/repos/DFormer b/repos/DFormer\n-Subproject commit aaa\n+Subproject commit bbb-dirty\n"
+    out = {"grok": {"approved": True, "coverage": [{"step_id": "s1", "status": "implemented", "diff_lines": ["-Subproject commit aaa"]}], "findings": []},
+           "codex": {"available": True, "findings": [{"severity": "low", "text": "x"}], "raw": "[P1] eval split leaks into training"}}
+    ok, reasons = gate.check_monitor(out, diff, [{"id": "s1"}], False)
+    assert ok, "check_monitor itself passes; the gitlink and forwarder checks live in gate_monitor (they need the worktree)"

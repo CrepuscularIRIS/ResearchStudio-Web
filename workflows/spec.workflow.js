@@ -11,7 +11,7 @@ const A = (typeof args === 'string' ? JSON.parse(args) : args) || {}
 
 const SPEC = {
   type: 'object',
-  required: ['method', 'steps', 'files', 'conditions', 'held_out', 'schedule', 'network', 'kill_cmd', 'canary', 'rationale_line', 'naive_baseline'],
+  required: ['source', 'method', 'steps', 'files', 'conditions', 'held_out', 'schedule', 'network', 'kill_cmd', 'canary', 'rationale_line', 'naive_baseline', 'method_prose'],
   properties: {
     source: { type: 'string' },
     method: { type: 'string' },
@@ -29,11 +29,13 @@ const SPEC = {
     network: { type: 'string' },
     kill_cmd: { type: 'string' },
     canary: { type: 'object', required: ['what', 'expected', 'tol'], properties: { what: { type: 'string' }, expected: { type: 'number' }, tol: { type: 'number' } } },
+    method_prose: { type: 'string' },
     notes: { type: 'string' },
   },
 }
 
 const spec = await agent(A.prompt + '\n\nStructured output only.', { agentType: 'scientist', label: `spec:${A.qid}`, phase: 'Spec', schema: SPEC, stallMs: 900000 })
+// the returned object is authoritative: `step.py propose --finish <qid> <saved output>` writes it to spec_path when Fable's own Write did not happen
 if (!spec) {
   log(`${A.qid}: scientist returned nothing (infrastructure failure, not a verdict)`)
   return { qid: A.qid, spec_path: A.spec_path, spec: null, error: 'scientist returned nothing' }

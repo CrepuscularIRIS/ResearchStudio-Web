@@ -16,7 +16,7 @@ Files (under .research/; Q = card id like Q-0001-alpha):
   <worktree>/results/<run>/  run ∈ {Q, Q-confirm}; progress.json is the watchdog's and Main's window into a running unit
 """
 from __future__ import annotations
-import argparse, math, hashlib, json, re, subprocess, sys, time
+import argparse, math, hashlib, json, os, re, subprocess, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -94,6 +94,8 @@ def records(r: Path) -> list[dict]:
         card = by_id.get(rec.get("card"))
         if not card or rec.get("run") != card["id"]:
             continue
+        if card.get("claim_sha") and (r.parent / "CLAIM.md").exists() and card["claim_sha"] != claim_sha(r.parent):
+            continue                                            # measured under another claim text: not this campaign's evidence
         rec["_mtime"] = p.stat().st_mtime
         rec["_chain"] = card.get("chain"); rec["_network"] = card.get("network"); rec["_phase"] = card.get("phase", "search")
         rec["_source"] = card.get("source"); rec["_rung"] = card.get("rung")
@@ -111,36 +113,80 @@ def _clean_cost(card: dict, rec: dict) -> float | None:
     return max(vals) if vals else None
 
 
+def baseline_chains(claim: dict) -> set[str]:
+    """Chains that run the incumbent/baseline: their records are references in the arithmetic, never candidates."""
+    return {n for n, cfg in (claim.get("chains") or {}).items()
+            if (cfg or {}).get("mode") == "baseline" or "baseline" in str((cfg or {}).get("seed_method", "")).lower()}
+
+
+def last_exit(r: Path, run: str) -> int | None:
+    """Exit code of the newest launcher stop line for `run` in ledger.jsonl (None = never stopped / never ran)."""
+    p = r / "ledger.jsonl"
+    if not p.exists():
+        return None
+    ex = None
+    for line in p.read_text(errors="ignore").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("event") == "stop" and e.get("run") == run:
+            ex = int(e.get("exit", 1))
+    return ex
+
+
 def valid(rec: dict, claim: dict) -> bool:
+    """Counted only when the record gate passed (step.py record writes gate_pass), the canary passed and clean cost is in bound."""
+    if rec.get("gate_pass") is not True:
+        return False
     if not (rec.get("canary") or {}).get("pass", False):
         return False
     cc = rec.get("_clean_cost")
     return cc is not None and cc <= float(claim.get("clean_cost_max", 0.2))
 
 
+def _candidate(x: dict, claim: dict) -> bool:
+    return valid(x, claim) and x.get("_chain") not in baseline_chains(claim)
+
+
+def _confirmed(x: dict, claim: dict) -> bool:
+    """Enough seeds and CI95 above zero (a single-seed band hit is a screen, not a result)."""
+    lo = (x.get("ci95") or [None, None])[0]
+    return int(x.get("n_realized", 0)) >= int(claim.get("seeds_for_keep", 3)) and lo is not None and float(lo) > 0
+
+
+def baseline_gain(recs: list[dict], claim: dict, network: str | None) -> float | None:
+    """The newest valid baseline-chain record on this network (the claim compares the candidate to it), or None."""
+    b = [x for x in recs if valid(x, claim) and x.get("_chain") in baseline_chains(claim) and not x.get("early_kill")
+         and (network is None or x.get("_network") == network)]
+    return float(max(b, key=lambda x: x["_mtime"])["mean"]) if b else None
+
+
 def networks_hit(recs: list[dict], claim: dict) -> set[str]:
-    """Networks with at least one valid, band-hitting, completed (not early-killed) record, search or support phase."""
-    return {str(x.get("_network")) for x in recs if valid(x, claim) and x.get("band_hit") and not x.get("early_kill") and x.get("_network")}
+    """Networks with at least one candidate record that is valid, band-hitting, confirmed (n, CI) and not early-killed."""
+    return {str(x.get("_network")) for x in recs
+            if _candidate(x, claim) and x.get("band_hit") and not x.get("early_kill") and _confirmed(x, claim) and x.get("_network")}
 
 
 def keep_records(recs: list[dict], claim: dict) -> list[dict]:
-    """KEEP = valid, band hit, enough seeds, CI95 excludes zero, not an early kill."""
-    need = int(claim.get("seeds_for_keep", 3))
+    """KEEP = candidate (not a baseline chain), valid, band hit, confirmed (n, CI95 > 0), not an early kill, and — when a
+    baseline chain exists — at least keep_gain above that chain's record on the same network (the claim's own keep rule);
+    while the baseline record is missing the KEEP waits."""
     out = []
+    has_baseline_chain = bool(baseline_chains(claim))
     for x in recs:
-        if not (valid(x, claim) and x.get("band_hit") and x["_phase"] == "search" and not x.get("early_kill")):
+        if not (_candidate(x, claim) and x.get("band_hit") and x["_phase"] == "search" and not x.get("early_kill") and _confirmed(x, claim)):
             continue
-        if int(x.get("n_realized", 0)) < need:
-            continue
-        lo = (x.get("ci95") or [None, None])[0]
-        if lo is None or float(lo) <= 0:
-            continue
+        if has_baseline_chain:
+            bg = baseline_gain(recs, claim, x.get("_network"))
+            if bg is None or float(x.get("mean", -1e9)) - bg < float(claim.get("keep_gain", 0) or 0):
+                continue
         out.append(x)
     return out
 
 
 def best_gain(recs: list[dict], claim: dict) -> tuple[float | None, float | None]:
-    v = [x for x in recs if valid(x, claim) and x["_phase"] == "search"]
+    v = [x for x in recs if _candidate(x, claim) and x["_phase"] == "search" and not x.get("early_kill")]
     if not v:
         return None, None
     b = max(v, key=lambda x: float(x.get("mean", -1e9)))
@@ -153,8 +199,31 @@ def kill_threshold(recs: list[dict], claim: dict) -> float:
     return floor if best is None else max(floor, best * float(claim.get("kill_frac_of_best", 0.5)))
 
 
-def search_gpu_h(recs: list[dict]) -> float:
-    return sum(float(x.get("cost_gpu_h", 0) or 0) for x in recs if x["_phase"] == "search")
+def search_gpu_h(recs: list[dict], claim: dict | None = None) -> float:
+    base = baseline_chains(claim) if claim else set()
+    return sum(float(x.get("cost_gpu_h", 0) or 0) for x in recs if x["_phase"] == "search" and x.get("_chain") not in base)
+
+
+def unrecorded_gpu_h(r: Path, claim: dict | None = None) -> float:
+    """Launcher wall time of search runs that ended without a record (smoke failures, stalls, relaunches): it is spent, so it counts."""
+    p = r / "ledger.jsonl"
+    if not p.exists():
+        return 0.0
+    base = baseline_chains(claim) if claim else set()
+    cards_by_id = {c["id"]: c for c in cards(r)}
+    total = 0.0
+    for line in p.read_text(errors="ignore").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        run = str(e.get("run", ""))
+        c = cards_by_id.get(run)
+        if e.get("event") != "stop" or not c or c.get("phase", "search") != "search" or c.get("chain") in base:
+            continue
+        if not (r / "records" / f"{run}.json").exists():
+            total += float(e.get("wall_s", 0) or 0) / 3600
+    return total
 
 
 def gpu_idle(threshold_mib: int = 2000) -> list[int]:
@@ -203,7 +272,10 @@ def support_rungs(claim: dict, r: Path) -> dict:
     kept_card = next((c for c in cards(r) if c["id"] == best["card"]), {})
     ladder = claim.get("support_ladder")
     if not ladder:
-        ladder = [{"kind": "network", "value": n} for n in (claim.get("networks") or []) if n != kept_card.get("network")]
+        # R1 = the kept spec at FULL schedule on the kept network: the kill test is a short-schedule screen and screens have inverted
+        # arm order before (CLAIM AVOID); the paper's headline number comes from this rung, never from the screen
+        ladder = [{"kind": "schedule", "value": f"full schedule on {kept_card.get('network')} (3 seeds): the paper's headline run"}]
+        ladder += [{"kind": "network", "value": n} for n in (claim.get("networks") or []) if n != kept_card.get("network")]
         ladder.append({"kind": "ablation", "value": "leave-one-training-condition-out over the kept spec's conditions"})
     rungs = []
     for i, rung in enumerate(ladder, 1):
@@ -211,7 +283,10 @@ def support_rungs(claim: dict, r: Path) -> dict:
         card = next((c for c in cards(r) if c.get("rung") == rid), None)
         status = "open"
         if card:
-            status = "queued" if queued(r, card["id"]) else ("done" if (r / "records" / f"{card['id']}.json").exists() else "active")
+            rec = _json(r / "records" / f"{card['id']}.json")
+            settled = bool(rec) and (rec.get("gate_pass") is False or not rec.get("band_hit") or rec.get("early_kill")
+                                     or int(rec.get("n_realized", 0)) >= int(claim.get("seeds_for_keep", 3)))
+            status = "queued" if queued(r, card["id"]) else ("done" if settled else "active")
         rungs.append({"id": rid, **rung, "status": status, "card": card["id"] if card else None})
     return {"kept": best["card"], "rungs": rungs}
 
@@ -227,7 +302,10 @@ def chain_next(name: str, cfg: dict, claim: dict, r: Path, idle: list[int], acti
     baseline = cfg.get("mode") == "baseline" or "baseline" in str(cfg.get("seed_method", "")).lower()
 
     def new_candidate(reason: str) -> dict:
-        q = f"Q-{len(mine) + 1:04d}-{name}"
+        n_next = len(mine) + 1
+        while queued(r, f"Q-{n_next:04d}-{name}"):        # a queued id with no card (spec never came) must not freeze the chain
+            n_next += 1
+        q = f"Q-{n_next:04d}-{name}"
         ladder = support_rungs(claim, r)
         rung = next((x for x in ladder["rungs"] if x["status"] == "open"), None) if ladder["kept"] and not baseline else None
         if ladder["kept"] and not baseline and not rung:
@@ -268,22 +346,37 @@ def chain_next(name: str, cfg: dict, claim: dict, r: Path, idle: list[int], acti
                 return {"state": "confirm_running", "qid": q, "lines": [f"# chain {name}: research-{q}-confirm.service active — wait · {progress_line(L, f'{q}-confirm')}"]}
             if g not in idle and not any(conf.glob("seed_*.json")):
                 return {"state": "confirm_wait_gpu", "qid": q, "lines": [f"# chain {name}: GPU {g} busy; confirm of {q} waits"]}
-            return {"state": "confirm", "qid": q, "lines": [f"python3 .research/step.py record {q}   # band hit: re-renders with the confirm seeds, or launches SEEDS=1..{need - 1}"]}
+            if (r / "build" / f"{q}.confirm_attempts").exists() and int((r / "build" / f"{q}.confirm_attempts").read_text().strip() or 0) >= 2:
+                return {"state": "confirm_exhausted", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"confirm launched twice without {need} seeds (unit exit {last_exit(r, f'{q}-confirm')})\""]}
+            return {"state": "confirm", "qid": q, "lines": [f"python3 .research/step.py record {q}   # band hit: re-renders with the confirm seeds, or launches the missing seeds"]}
+        if rec.get("gate_pass") and not any(e.get("run") == q and e.get("type") == "result" for e in _json_list(r / "notebook.json")):
+            return {"state": "notebook_pending", "qid": q, "lines": [f"python3 .research/bundle.py notebook {q}   # record gated but the notebook/map update did not land"]}
         verdict = "early kill" if rec.get("early_kill") else ("KEEP" if rec.get("band_hit") and int(rec.get("n_realized", 0)) >= need else ("kill" if rec.get("kill_hit") else "below band"))
         return new_candidate(f"chain {name}: {q} recorded ({verdict}); next candidate")
     if active(q):
         return {"state": "running", "qid": q, "lines": [f"# chain {name}: research-{q}.service active — wait · {progress_line(L, q)}"]}
     if any(results_dir(L, q).glob("seed_*.json")):
         return {"state": "finished", "qid": q, "lines": [f"python3 .research/step.py record {q}"]}
-    if (r / "tokens" / f"{q}.clean").exists():
-        if g not in idle:
-            return {"state": "launch_wait_gpu", "qid": q, "lines": [f"# chain {name}: GPU {g} busy; launch of {q} waits"]}
-        return {"state": "launch", "qid": q, "lines": [f"python3 .research/step.py build --finish {q} .research/bundles/build-out-{q}.json   # token exists: (re)launch"]}
     out = r / "bundles" / f"build-out-{q}.json"
     mon = r / "monitor" / f"{q}.json"
     fixes = (r / "build" / f"{q}.fixes").exists()
     if out.exists() and (not mon.exists() or out.stat().st_mtime > mon.stat().st_mtime):
         return {"state": "build_out", "qid": q, "lines": [f"python3 .research/step.py build --finish {q} {out}"]}
+    if (r / "tokens" / f"{q}.clean").exists():
+        ex = last_exit(r, q)
+        if ex is not None and ex not in (0, 4):
+            if ex == 5:
+                if (r / "build" / f"{q}.relaunched").exists():
+                    return {"state": "stall_twice", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"unit stalled twice (exit 5): infrastructure, see journalctl --user -u research-{q}.service\""]}
+                if g not in idle:
+                    return {"state": "launch_wait_gpu", "qid": q, "lines": [f"# chain {name}: GPU {g} busy; relaunch of {q} after a stall waits"]}
+                return {"state": "stall_relaunch", "qid": q, "lines": [f"python3 .research/step.py build --finish {q} {out}   # exit 5 (stall/NaN) = infrastructure: one relaunch"]}
+            if fixes:
+                return {"state": "unit_failed_twice", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"unit exit {ex} after the fix round (3 = canary failed)\""]}
+            return {"state": "unit_failed", "qid": q, "lines": [f"python3 .research/step.py build {q} --fix   # unit exit {ex} (3 = canary outside tol): the builder gets the unit log tail once"]}
+        if g not in idle:
+            return {"state": "launch_wait_gpu", "qid": q, "lines": [f"# chain {name}: GPU {g} busy; launch of {q} waits"]}
+        return {"state": "launch", "qid": q, "lines": [f"python3 .research/step.py build --finish {q} {out}   # token exists: launch"]}
     if mon.exists() and not _json(mon).get("approved"):
         if fixes:
             return {"state": "monitor_rejected_twice", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"monitor rejected twice: {mon}\""]}
@@ -328,19 +421,42 @@ def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: l
                          "Workflow(name='pivot', args=<contents of args-pivot.json>)   # explorer (K3) once",
                          "human: exit (a) ship the incumbent with the negative generalisation result, (b) edit CLAIM.md (keep_networks / networks) and re-accept"]}
     if ladder_complete:
-        return {"stage": "D", "reason": f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)",
+        if (r / "DONE").exists():
+            return {"stage": "DONE", "reason": (r / "DONE").read_text().strip() or "deliverables gate passed", "next": ["# nothing: the paper is built and gated"]}
+        review = _json(r / "gates" / "write-review.json")
+        head = f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)"
+        if review.get("verdict") == "pass":
+            return {"stage": "D", "reason": head + "; final review passed",
+                    "next": ["python3 .research/gate.py deliverables   # numbers on every section, review pass, main.pdf fresh → writes .research/DONE"]}
+        if review.get("verdict") == "block":
+            return {"stage": "D", "reason": head + "; final review BLOCKED",
+                    "next": ["human: the final review blocked the manuscript — " + "; ".join(str(x) for x in (review.get("issues") or [])[:5]),
+                             "# after the fix: python3 .research/bundle.py write > .research/bundles/args-write.json → Workflow(name='write', ...) → step.py write --finish <out>"]}
+        return {"stage": "D", "reason": head,
                 "next": ["python3 .research/bundle.py write > .research/bundles/args-write.json",
                          "Workflow(name='write', args=<contents of args-write.json>)   # writer (GLM) per section, polish (Fable), review (Grok)",
-                         "python3 .research/gate.py numbers paper/merged/sections/05_method.tex paper/merged/sections/06_experiments.tex",
-                         "cd paper/merged && latexmk -pdf main.tex"]}
+                         "python3 .research/step.py write --finish .research/bundles/write-out.json   # saves the review verdict; stage D reads it"]}
+    qs = _json_list(r / "queue.json")[-3:]
+    infra_rx = re.compile(r"returned nothing|infrastructure|stalled twice|exit 5", re.I)
+    if len(qs) == 3 and all(infra_rx.search(str(e.get("text", ""))) for e in qs):
+        try:
+            span_h = (datetime.fromisoformat(qs[-1]["t"]).timestamp() - datetime.fromisoformat(qs[0]["t"]).timestamp()) / 3600
+        except (KeyError, ValueError):
+            span_h = 0.0
+        if span_h <= 2.0:
+            (r / "INFRA-STOP").write_text("\n".join(str(e.get("text", "")) for e in qs) + "\n")
+            return {"stage": "STOP", "reason": "three consecutive candidates queued for infrastructure failures within 2 h (proxy / lanes / GPU): fix the harness, delete .research/INFRA-STOP",
+                    "next": ["human: read .research/INFRA-STOP and queue.json"]}
     best, t_best = best_gain(recs, claim)
-    clock_start = t_best if t_best else max((r / "CLAIM.sha").stat().st_mtime, (r / "mechanism-map.json").stat().st_mtime)
+    clock_start = t_best if t_best else (r / "CLAIM.sha").stat().st_mtime      # never the map's mtime: bookkeeping must not reset the clock
     hours = (now - clock_start) / 3600
-    used = search_gpu_h(recs)
+    used = search_gpu_h(recs, claim) + unrecorded_gpu_h(r, claim)
+    dry = len([x for x in recs if _candidate(x, claim) and x["_phase"] == "search" and (t_best is None or x["_mtime"] > t_best)])
+    dry_stop = int(claim.get("stop_dry_runs", 4) or 4)
     srcs = mp.get("sources") or []
     exhausted = bool(srcs) and not ladder["kept"] and not open_sources and not any(s.get("status") == "tried" and int(s.get("no_improve") or 0) == 0 for s in srcs)
-    if not ladder["kept"] and (hours >= float(claim.get("stop_hours_no_improve", 24)) or used >= float(claim.get("stop_search_gpu_h", 24)) or exhausted):
-        why = "every mechanism-map source exhausted" if exhausted else f"no improvement for {hours:.1f} h (best {best}), search GPU-h {used:.1f}"
+    if not ladder["kept"] and (hours >= float(claim.get("stop_hours_no_improve", 24)) or used >= float(claim.get("stop_search_gpu_h", 24)) or exhausted or dry >= dry_stop):
+        why = "every mechanism-map source exhausted" if exhausted else (f"{dry} completed candidates since the last best (stop_dry_runs {dry_stop})" if dry >= dry_stop else f"no improvement for {hours:.1f} h (best {best}), search GPU-h {used:.1f}")
         return {"stage": "P", "reason": why,
                 "next": ["python3 .research/bundle.py pivot > .research/bundles/args-pivot.json",
                          "Workflow(name='pivot', args=<contents of args-pivot.json>)   # explorer (K3) once",
@@ -372,7 +488,7 @@ def board(w: Path = W, r: Path | None = None) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd")
-    sub.add_parser("accept", help="owner only: record CLAIM.md's sha as accepted")
+    p = sub.add_parser("accept", help="owner only: record CLAIM.md's sha as accepted (logged to ledger.jsonl)"); p.add_argument("--by"); p.add_argument("--why")
     sub.add_parser("board", help="print the leaderboard")
     sub.add_parser("map", help="print the mechanism map's source statuses")
     sub.add_parser("json")
@@ -380,6 +496,23 @@ def main() -> int:
     if a.cmd == "accept":
         c = load_claim(W) or {}
         sd, n, kg = c.get("seed_sd"), int(c.get("seeds_for_keep", 3) or 3), float(c.get("keep_gain", 0) or 0)
+        missing = [k for k in ("seed_sd", "a_terms") if not c.get(k)]
+        if missing:
+            print(f"REFUSED: CLAIM lacks {missing}: seed_sd sets the MDE the keep bar must clear; a_terms is what the precedent search uses (without it the novelty check cannot fire)"); return 1
+        if not c.get("eval_entry"):
+            print("WARNING: no eval_entry — the two chains may score through different code (normalisation fraud is unguarded); name the shared scorer if one exists")
+        if re.search(r"\bConD\b|dropout|injection|distill|fusion module|adapter", str(c.get("sentence", "")), re.I):
+            print("WARNING: the claim sentence names a method; candidates are supposed to come from the mechanism map, not from the claim")
+        prev = None
+        for line in ((HERE / "ledger.jsonl").read_text(errors="ignore").splitlines() if (HERE / "ledger.jsonl").exists() else []):
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if e.get("event") == "accept":
+                prev = e
+        if prev and kg < float(prev.get("keep_gain") or 0) - 1e-9:
+            print(f"REFUSED: keep_gain {kg} is below the previously accepted {prev.get('keep_gain')} (tighten, never loosen; a lower bar needs a new claim)"); return 1
         if sd is None:
             print("WARNING: CLAIM has no seed_sd — the keep bar is not checked against the minimum detectable effect (Lehr); add seed_sd from the baseline's seed spread")
         else:
@@ -389,6 +522,11 @@ def main() -> int:
                       f"({math.ceil(2 * (2.8 * float(sd) / kg) ** 2) if kg > 0 else '?'} seeds would do) — a bar below the MDE cannot fail (see feedback: prereg thresholds must bind)")
                 return 1
             print(f"keep_gain {kg} clears the MDE {mde:.2f} (seed_sd {sd}, {n} seeds)")
+        old_sha = (HERE / "CLAIM.sha").read_text().strip() if (HERE / "CLAIM.sha").exists() else None
+        with (HERE / "ledger.jsonl").open("a") as fh:
+            fh.write(json.dumps({"event": "accept", "sha": claim_sha(W), "prev_sha": old_sha, "keep_gain": kg, "seeds_for_keep": n, "seed_sd": sd,
+                                 "keep_networks": c.get("keep_networks"), "by": a.by or os.environ.get("USER", "owner"), "why": a.why or "",
+                                 "t": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
         (HERE / "CLAIM.sha").write_text(claim_sha(W) + "\n"); print("accepted", claim_sha(W)[:12]); return 0
     if a.cmd == "board":
         print(board()); return 0

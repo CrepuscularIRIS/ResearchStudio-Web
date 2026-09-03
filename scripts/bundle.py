@@ -15,7 +15,7 @@ Every subcommand prints ONE JSON object on stdout (WORKFLOW.md §5).
   queue <qid> <text>         → {queued}
 """
 from __future__ import annotations
-import argparse, hashlib, json, re, subprocess, sys, time
+import argparse, hashlib, json, os, re, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -41,6 +41,7 @@ SPEC_SCHEMA = {
     "expected_gain": 0.0, "network": "one of claim.networks",
     "kill_cmd": "one shell command run inside the worktree by the launcher; it MUST honour $RESULTS_DIR, $SEED and $SMOKE and write $RESULTS_DIR/seed_$SEED.json",
     "canary": {"what": "known number reproduced before the metric is read", "expected": 0.0, "tol": 0.0},
+    "method_prose": "6-12 sentences of paper-grade method text for THIS candidate, written BEFORE any result exists: what is changed, why the source mechanism predicts it, what the disanalogy forced you to adapt. No numbers, no results, no comparatives (AAR: the method section is frozen with the card and reused verbatim)",
     "notes": "≤3 lines",
 }
 RESULT_CONTRACT = ('the launcher exports RESULTS_DIR, SEED (default 0) and SMOKE; the unit first runs the command with SMOKE=1 (≤1% of the data, ≤15 min, '
@@ -49,7 +50,7 @@ RESULT_CONTRACT = ('the launcher exports RESULTS_DIR, SEED (default 0) and SMOKE
                    '"clean_cost": <clean mIoU drop, mIoU>, "canary": {"expected", "observed", "tol"}, "checkpoint_loaded_frac": <float>, '
                    '"artifacts": ["<abs paths>"]} and $RESULTS_DIR/blockers.json = [{"severity", "text"}] (an empty list is a claim that you found none; a missing file fails the record); '
                    'during SMOKE=0 training it MUST rewrite $RESULTS_DIR/progress.json = {"fraction": <0..1 of the schedule>, "dev_gain": <held-out structured gain on the DEV half vs zero fill so far>, '
-                   '"clean_dev_cost": <clean dev mIoU drop so far>, "loss": <last loss>, "t": <iso time>} at every eval checkpoint (at least every 10% of the schedule): a watchdog kills a run whose dev_gain is below the early-stop line, and a run that never writes it')
+                   '"clean_dev_cost": <clean dev mIoU drop so far>, "loss": <last loss>, "t": <iso time>} at every eval checkpoint (at least every 10% of the schedule); the record gate refuses a run that exits 0 with fraction < 0.95 or never wrote it')
 NO_HISTORY = "NO PRIOR RUNS ON THIS CHAIN — you have no past results, methods or scores here; do not assume, recall or invent any."
 CODEX_GLOB = "~/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs"
 
@@ -86,13 +87,14 @@ def _claim_text() -> str:
 
 
 def _claim_core() -> str:
+    """The yaml block plus the sections that state the claim and its rules. Insight, literature table, candidate order and
+    seed methods stay out: they name methods, and a bundle that names a method decides the experiment (Sparking A→S shortcut)."""
     txt = _claim_text()
     keep = []
-    for sec in re.split(r"(?m)^(?=## )", txt):
+    for i, sec in enumerate(re.split(r"(?m)^(?=## )", txt)):
         head = sec.splitlines()[0] if sec.strip() else ""
-        if re.search(r"文献|literature|循环|loop|步骤", head, re.I):
-            continue
-        keep.append(sec)
+        if i == 0 or re.search(r"唯一的 claim|^## claim|规则|rules|AVOID", head, re.I):
+            keep.append(sec)
     return "".join(keep)
 
 
@@ -155,8 +157,12 @@ def _repo_files(limit: int = 80) -> list[str]:
         out = subprocess.run(["git", "-C", str(_repo()), "ls-tree", "-r", "--name-only", "research-trunk"], capture_output=True, text=True, timeout=20).stdout
     except (OSError, subprocess.TimeoutExpired):
         return []
-    files = [l for l in out.splitlines() if re.search(r"\.(py|yaml|yml|sh|json)$", l) and not l.startswith(("papers/", "results/", "docs/"))]
-    return files[:limit]
+    skip = ("papers/", "results/", "docs/", ".grill/", "cache/", "experiments/", "archive/", "logs/", "notebooks/", "tests/")
+    files = [l for l in out.splitlines() if re.search(r"\.(py|yaml|yml|sh)$", l) and not l.startswith(skip) and "/__pycache__/" not in l]
+    files.sort(key=lambda l: (0 if l.startswith(("scripts/", "repos/", "models/", "src/", "tools/", "configs/")) else 1, l))
+    if len(files) > limit:
+        return files[:limit] + [f"... {len(files) - limit} more tracked files omitted (ask by directory: the builder can ls the worktree)"]
+    return files
 
 
 def _protected() -> list[str]:
@@ -168,7 +174,12 @@ def _prompt(task: str, bundle: dict, schema: dict | None, tools_note: str = "", 
     parts = [tools_note or ISOLATION]
     if untrusted:
         parts.append(UNTRUSTED)
-    parts += ["", f"## 任务\n{task}", "", "## bundle", "```json", json.dumps(bundle, ensure_ascii=False, indent=1), "```"]
+    bundle = dict(bundle)
+    avoid = bundle.pop("avoid", None)
+    parts += ["", f"## 任务\n{task}"]
+    if avoid:
+        parts += ["", "## AVOID（已被证伪的机制和已知陷阱。不是建议：新方案必须绕开每一条，除非 rationale_line 说明为什么这次不同）"] + [f"- {a}" for a in avoid]
+    parts += ["", "## bundle", "```json", json.dumps(bundle, ensure_ascii=False, indent=1), "```"]
     if schema:
         parts += ["", "## 返回的 JSON 必须是这个形状", "```json", json.dumps(schema, ensure_ascii=False, indent=1), "```"]
     return "\n".join(parts)
@@ -206,8 +217,7 @@ def cmd_A() -> dict:
 def cmd_M() -> dict:
     c = _claim()
     anomalies = (HERE / "anomalies.md").read_text(encoding="utf-8") if (HERE / "anomalies.md").exists() else "(no anomalies file; ground B in the claim's evidence table only)"
-    bundle = {"claim": _claim_core(), "anomalies": anomalies, "avoid": _avoid_list(),
-              "held_out": c.get("held_out"), "networks": c.get("networks")}
+    bundle = {"claim": _claim_core(), "anomalies": anomalies, "held_out": c.get("held_out"), "metric": c.get("metric")}
     task = ("按 A→B→M 做三层：(1) 列出 2–4 个失败模式 B：现有方法为什么满足不了 claim，每条必须引用 anomalies 或 claim 证据表里的一条测量（grounded_in），"
             "不引用测量的 B 不要写；(2) 对每个 B 做三层抽象得到机制 M：连问三次“去掉领域名词后本质是什么”，把三层都写出来，最后一层是一句不含 RGB/深度/分割等领域词的机制陈述。"
             "第一性原理：observation → failure mode → mechanism；不要用 domain adaptation / fusion 这类领域标签当机制。不要提任何解决方法，不要提任何论文。返回 {\"failure_modes\": [{\"id\": \"B1\", \"text\": \"\", \"grounded_in\": [\"\"]}], "
@@ -228,8 +238,27 @@ def _grounded(g: str, ground_txt: str) -> bool:
     return bool(nums) and all(x in ground_txt for x in nums)
 
 
+def _domain_stoplist(c: dict) -> list[str]:
+    """Words that mean the mechanism or query is still inside A (Sparking: 'strip the domain nouns'): A terms, networks, held-out words."""
+    import gate
+    base = ["rgb-d", "rgbd", "depth", "segmentation", "miou", "rgb"]
+    return sorted({w.lower() for w in base + [str(t) for t in (c.get("a_terms") or [])] + [str(n) for n in (c.get("networks") or [])] + gate.held_out_terms(c)} - {"structured"})
+
+
+def _domain_words(text: str, stop: list[str]) -> list[str]:
+    low = str(text or "").lower()
+    return [w for w in stop if re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", low)]
+
+
 def cmd_mechanism_finish(out_path: str) -> dict:
     out = json.loads(Path(out_path).read_text())
+    if out.get("error") or not out.get("failure_modes"):
+        nb = _notebook(); nb.append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "type": "error", "run": "mechanism", "text": f"mechanism workflow returned nothing usable: {out.get('error') or 'no failure modes'} (infrastructure, not a verdict)"})
+        (HERE / "notebook.json").write_text(json.dumps(nb, indent=1, ensure_ascii=False))
+        raise SystemExit(f"mechanism workflow: {out.get('error') or 'no failure modes returned'} — infrastructure failure, the map is NOT written; re-run: python3 .research/step.py mechanism")
+    stop = _domain_stoplist(_claim())
+    old = _map() if (HERE / "mechanism-map.json").exists() else {}
+    old_by_key = {(str(s.get("domain")).lower() + "|" + str(s.get("name")).lower()): s for s in (old.get("sources") or [])}
     ground_txt = gapmap.norm(((HERE / "anomalies.md").read_text(encoding="utf-8") if (HERE / "anomalies.md").exists() else "")
                              + " " + ((W / "CLAIM.md").read_text(encoding="utf-8") if (W / "CLAIM.md").exists() else ""))
     fms, bad_b = [], set()
@@ -241,18 +270,42 @@ def cmd_mechanism_finish(out_path: str) -> dict:
             bad_b.add(str(fm.get("id"))); fms.append({**fm, "status": "dropped", "drop_reason": "no grounded_in entry is found in anomalies.md / CLAIM.md (a failure mode is a measurement, not an opinion)"})
     mechs, bad_m = [], set()
     for m in out.get("mechanisms") or []:
+        last = (m.get("levels") or [""])[-1]
+        dw = _domain_words(f"{last} {m.get('text', '')}", stop)
         if str(m.get("from")) in bad_b:
             bad_m.add(str(m.get("id"))); mechs.append({**m, "status": "dropped", "drop_reason": f"its failure mode {m.get('from')} is ungrounded"})
+        elif dw:
+            bad_m.add(str(m.get("id"))); mechs.append({**m, "status": "dropped", "drop_reason": f"not domain-free: still says {dw} (Sparking: strip the domain nouns three times)"})
         else:
             mechs.append(m)
-    sources, dropped = [], []
-    for i, s in enumerate(out.get("sources") or [], 1):
-        sid = f"S{i}"
-        rec = s.get("recipe") or {}
+    sources, dropped, errors = [], [], []
+    used_ids = {str(s.get("id")) for s in (old.get("sources") or [])}
+    n_new = 0
+    for s in out.get("sources") or []:
+        key = str(s.get("domain")).lower() + "|" + str(s.get("name")).lower()
+        prev = old_by_key.get(key)
+        if prev:
+            sid = prev["id"]
+        else:
+            n_new += 1
+            while f"S{len(used_ids) + n_new}" in used_ids:
+                n_new += 1
+            sid = f"S{len(used_ids) + n_new}"
+        rec = s.get("recipe")
+        if rec is None or s.get("error"):
+            errors.append({"id": sid, "mechanism": s.get("mechanism"), "domain": s.get("domain"), "name": s.get("name"), "isomorphism": s.get("isomorphism"),
+                           "disanalogy": s.get("disanalogy"), "naive_in_A": s.get("naive_in_A"), "pattern": s.get("pattern"), "query": s.get("query"),
+                           "status": "error", "drop_reason": f"retrieval returned nothing: {s.get('error') or 'no recipe object'} (infrastructure; re-run step.py mechanism to retry)",
+                           "best": None, "no_improve": 0, "tried": []})
+            continue
+        rec = rec or {}
         kn = rec.get("key_number") or {}
         fails = []
         if str(s.get("mechanism")) in bad_m:
-            fails.append(f"mechanism {s.get('mechanism')} rests on an ungrounded failure mode")
+            fails.append(f"mechanism {s.get('mechanism')} rests on an ungrounded or domain-bound failure mode")
+        qw = _domain_words(s.get("query", ""), stop)
+        if qw:
+            fails.append(f"query is not cross-domain: contains {qw}")
         if not rec.get("steps"):
             fails.append("no procedure steps (a name is not a recipe)")
         if not str(s.get("disanalogy", "")).strip():
@@ -263,27 +316,55 @@ def cmd_mechanism_finish(out_path: str) -> dict:
             fails += gapmap.check_line_refs(fm, Path(txt).read_text(errors="ignore"))
         elif kn:
             fails.append("key_number has no verifiable text_path/line")
-        prec = s.get("precedent") or {}
+        prec = dict(s.get("precedent") or {})
         if prec.get("found"):
-            fails.append(f"precedent: {prec.get('paper')} already applies this mechanism to A — {str(prec.get('quote', ''))[:120]}")
+            # an agent's boolean drops nothing on its own: the precedent needs a paper id AND a quote of >= 8 words (verifiable later)
+            if prec.get("paper") and len(str(prec.get("quote", "")).split()) >= 8:
+                fails.append(f"precedent: {prec.get('paper')} already applies this mechanism to A — {str(prec.get('quote', ''))[:120]}")
+            else:
+                prec["found"] = False; prec["unverified"] = True
         entry = {"id": sid, "mechanism": s.get("mechanism"), "domain": s.get("domain"), "name": s.get("name"), "isomorphism": s.get("isomorphism"),
-                 "disanalogy": s.get("disanalogy"), "naive_in_A": s.get("naive_in_A"),
+                 "disanalogy": s.get("disanalogy"), "naive_in_A": s.get("naive_in_A"), "pattern": s.get("pattern"), "query": s.get("query"),
                  "recipe": {k: rec.get(k) for k in ("paper", "title", "steps", "key_number", "text_path", "avoid")},
                  "precedent": prec, "status": "dropped" if fails else "open", "drop_reason": "; ".join(fails) if fails else None,
                  "best": None, "no_improve": 0, "tried": []}
+        if prev and not fails:                                   # the hill-climb memory survives a re-run / an owner edit
+            for k in ("status", "best", "no_improve", "tried", "queued"):
+                if prev.get(k) is not None:
+                    entry[k] = prev[k]
+            if entry["status"] == "dropped":
+                entry["status"] = "open"
         (dropped if fails else sources).append(entry)
+    if out.get("sources") and len(errors) * 2 >= len(out.get("sources")):
+        raise SystemExit(f"mechanism workflow: {len(errors)}/{len(out['sources'])} sources came back without a recipe object (retrieval lane failed) — infrastructure, the map is NOT written; re-run: python3 .research/step.py mechanism")
+    retired = [{**s, "status": "retired", "drop_reason": "not in the latest mechanism run"} for k, s in old_by_key.items()
+               if k not in {str(s.get("domain")).lower() + "|" + str(s.get("name")).lower() for s in (out.get("sources") or [])} and s.get("tried")]
     mp = {"made_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "claim_sha": stage.claim_sha(W),
-          "failure_modes": fms, "mechanisms": mechs, "sources": sources + dropped,
-          "infra": out.get("stats")}
+          "failure_modes": fms, "mechanisms": mechs, "sources": sources + dropped + errors + retired,
+          "infra": out.get("stats"), "runs": int(old.get("runs") or 0) + 1}
     (HERE / "mechanism-map.json").write_text(json.dumps(mp, indent=1, ensure_ascii=False))
-    return {"open": len(sources), "dropped": [{"id": d["id"], "why": d["drop_reason"]} for d in dropped]}
+    return {"open": len(sources), "dropped": [{"id": d["id"], "why": d["drop_reason"]} for d in dropped], "error": [e["id"] for e in errors], "retired": [x["id"] for x in retired]}
 
 
 # ── C1 spec ─────────────────────────────────────────────────────────────────
 
-def _eligible(s: dict) -> bool:
-    """A source the next spec may use: open, or tried and its last version refreshed the best (no_improve == 0)."""
-    return s.get("status") == "open" or (s.get("status") == "tried" and int(s.get("no_improve") or 0) == 0)
+def _eligible(s: dict, patience: int = 2) -> bool:
+    """A source the next spec may use: open, or tried with fewer than `patience` non-improving versions (the same number
+    update_map exhausts on — one definition, so no source sits in limbo)."""
+    return s.get("status") == "open" or (s.get("status") == "tried" and int(s.get("no_improve") or 0) < patience)
+
+
+def _pick_source(chain: str) -> dict | None:
+    """The script's default source for the next spec: the parent's source while it keeps improving, else the first eligible."""
+    srcs = [s for s in _map().get("sources") or [] if _eligible(s)]
+    if not srcs:
+        return None
+    mine = [c for c in stage.cards(HERE) if c.get("chain") == chain]
+    if mine:
+        p = next((s for s in srcs if s.get("id") == mine[-1].get("source") and int(s.get("no_improve") or 0) == 0 and s.get("tried")), None)
+        if p:
+            return p
+    return srcs[0]
 
 
 def _map_view(eligible_only: bool = False) -> list[dict]:
@@ -315,11 +396,11 @@ def cmd_spec(chain: str, retry: bool = False, rung: str | None = None) -> dict:
     parent = None
     if mine:
         p = mine[-1]
-        parent = {"id": p["id"], "spec": p.get("spec"), "record": {k: stage._json(HERE / "records" / f"{p['id']}.json").get(k) for k in ("mean", "band_hit", "kill_hit", "n_realized")},
+        parent = {"id": p["id"], "spec": p.get("spec"), "record": {k: stage._json(HERE / "records" / f"{p['id']}.json").get(k) for k in ("mean", "band_hit", "kill_hit", "n_realized", "early_kill", "fraction", "gate_pass", "gate_fails")},
                   "monitor": stage._json(HERE / "monitor" / f"{p['id']}.json").get("reasons"), "blockers": stage._json_list(stage.results_dir(p, p["id"]) / "blockers.json")}
     bundle = {"qid": qid, "chain": chain, "gpu": cfg.get("gpu"), "iteration": n, "mode": "baseline" if baseline else "mechanism",
               "seed_method": cfg.get("seed_method") if baseline else None, "incumbent": cfg.get("seed_method") if not baseline else None, "parent": parent,
-              "claim": _claim_core(), "board": stage.board(W, HERE), "chain_history": _chain_history(chain) or [NO_HISTORY],
+              "claim": _claim_core(), "chain_history": _chain_history(chain) or [NO_HISTORY],
               "numbers": {"kill_threshold": stage.kill_threshold(recs, c), "keep_gain": c.get("keep_gain"), "clean_cost_max": c.get("clean_cost_max"),
                           "gpu_h_cap": c.get("kill_gpu_h_cap", 4), "held_out": c.get("held_out"), "networks": c.get("networks")},
               "avoid": _avoid_list(), "repo_files": _repo_files(), "result_contract": RESULT_CONTRACT}
@@ -331,20 +412,36 @@ def cmd_spec(chain: str, retry: bool = False, rung: str | None = None) -> dict:
         kept = stage._json(HERE / "cards" / f"{ladder['kept']}.json")
         bundle["mode"] = "support"; bundle["rung"] = rung_obj; bundle["kept"] = {"id": kept.get("id"), "spec": kept.get("spec"), "network": kept.get("network"),
                                                                                   "record": {k: stage._json(HERE / "records" / f"{kept.get('id')}.json").get(k) for k in ("mean", "n_realized", "ci95")}}
-        task = (f"链 {chain} 进入支持阶段。kept 是已确认的方法（3 种子、CI 排除 0）。本轮只做 rung 指定的一件事：kind=network → 把 kept.spec 原样移植到该网络（只改与网络相关的文件，方法不变）；"
+        bundle["numbers"]["gpu_h_cap"] = c.get("support_gpu_h_cap", 40)
+        task = (f"链 {chain} 进入支持阶段。kept 是已确认的方法（3 种子、CI 排除 0）。本轮只做 rung 指定的一件事：kind=schedule → 同一 spec、同一网络，把 schedule 改成论文用的完整 schedule（kill test 只是短 schedule 筛选，不能进论文），gpu_h ≤ gpu_h_cap；kind=network → 把 kept.spec 原样移植到该网络（只改与网络相关的文件，方法不变）；"
                 f"kind=dataset → 同一代码换数据集；kind=ablation → 对 kept.spec.conditions 做一次 leave-one-out，每个条件一个配置，由 kill_cmd 内部循环并把每个配置的值写成一个 seed 文件（seed_k = 去掉第 k 个条件）。"
-                f"`source` 填 kept 的 source，`network` 按 rung 填。写成 B1 规格。")
+                f"`source` 填 kept 的 source，`network` 按 rung 填。写成 B1 规格；method_prose 抄 kept.spec.method_prose 并只改网络/数据集/消融那一句。")
     elif baseline:
-        task = (f"链 {chain} 是对照链：把 seed_method 作为论文需要的基线原样实现成 B1 规格（`source` 填 \"baseline\"），之后的迭代只修复 parent 的 blockers / monitor 理由，不改方法。")
+        task = (f"链 {chain} 是对照链：把 seed_method 作为论文需要的基线原样实现成 B1 规格（`source` 填 \"baseline\"；method_prose 描述这个基线），之后的迭代只修复 parent 的 blockers / monitor 理由，不改方法。")
     else:
-        bundle["mechanism_map"] = _map_view(eligible_only=True)
-        task = (f"链 {chain} 走机制图。incumbent 只是论文里现成的对照方法，不是你的候选：候选只能来自 mechanism_map。规则：只能选 status=open 的 source，或者当 parent 的 source 上一版刷新了最好成绩（no_improve=0）时在同一 source 上改一版；"
-                f"status=exhausted/dropped 的 source 永远不选。把选中 source 的配方（recipe_steps）按 disanalogy 适配到 A，写成 B1 规格：每一步指向 files 里一个具体文件并写清改什么，"
-                f"held-out 类别不进训练，kill test 在 gpu_h_cap 之内，`source` 填该 source 的 id。"
-                f"先诊断再迭代：parent 的 record / blockers / monitor 理由说明上一版为什么没成，改的必须是那个原因。"
-                f"与 chain_history、tried、AVOID 里任何一条步骤相同的规格不算候选（脚本会按步骤指纹拒收）。"
-                f"AVOID 是已被证伪的机制，不是建议：新规格必须绕开每一条，除非 rationale_line 说明为什么这次不同。"
-                f"naive_baseline 从该 source 的 naive_in_A 出发写（机制在 A 里最朴素的版本），规格必须说明为何能胜过它；rationale_line 一句。")
+        pick = _pick_source(chain)
+        if not pick:
+            raise SystemExit(f"chain {chain}: no eligible source in the mechanism map (stage.py should print P or R)")
+        full = next(v for v in _map_view() if v["id"] == pick["id"])
+        bundle["source"] = full
+        bundle["other_eligible"] = [{"id": v["id"], "domain": v["domain"], "name": v["name"], "mechanism": v["mechanism"], "recipe_steps": v.get("recipe_steps")}
+                                    for v in _map_view() if _eligible(next(s for s in _map()["sources"] if s["id"] == v["id"])) and v["id"] != pick["id"]]
+        bundle["exhausted_or_dropped"] = [v["id"] for v in _map_view() if v["status"] in ("exhausted", "dropped", "retired", "error")]
+        ee = str(c.get("eval_entry") or "").strip()
+        task = "\n".join([
+            f"链 {chain}，机制图模式，第 {n} 轮。只做一件事：把 source（{pick['id']}：{pick.get('domain')} — {pick.get('name')}）的配方按 disanalogy 适配到 A，写成 B1 规格，写到 {spec_path}，再返回同一个 JSON。",
+            "规则（每条都由 gate.py spec 检查）：",
+            f"1. `source` = \"{pick['id']}\"。other_eligible 里的 id 也可以选（那就填它的 id，并在 rationale_line 说明为什么）；exhausted_or_dropped 里的永远不选。",
+            "2. steps ≥ 3；每步 file ∈ files，且存在于 research-trunk（新建文件标 new: true）；change 写清函数 / 损失 / 条件集 / schedule / 数字，不写名词。",
+            "3. conditions 不含 held_out；held_out 原样抄 claim。",
+            f"4. schedule.gpu_h ≤ {c.get('kill_gpu_h_cap', 4)}；kill_cmd 含 $RESULTS_DIR、$SEED、$SMOKE" + (f"，并通过 {ee} 评分（共用评分入口，任何 step 不得改它）" if ee else "") + "；不含 pip/git/curl/wget 和 worktree 外的绝对路径。",
+            "5. canary = 一个已知数字 + tol > 0（smoke 阶段先复现它，再读任何指标）。",
+            f"6. naive_baseline 从 source.naive_in_A（{full.get('naive_in_A') or '未给出：自己写机制在 A 里最朴素的版本'}）出发，一句；规格必须说明为何胜过它。",
+            "7. rationale_line 一句：约束是哪个失败模式 B；parent（若有）没成的原因见 parent.record / blockers / monitor，这版改的就是那个原因（先诊断再迭代）。",
+            "8. method_prose：6–12 句论文级方法描述，写在任何结果之前，不含数字、不含结果、不含比较词；它随 card 冻结，论文方法节只从它生成。",
+            "9. 与 chain_history、tried、AVOID 里任何一条步骤相同的规格不算候选（脚本按步骤指纹拒收）。",
+            f"incumbent（{cfg.get('seed_method')}）是论文现成的对照，不是候选。配方是方向，不是实现指令。",
+        ])
     task += f" 把规格 JSON 写到 {spec_path}，再返回它。"
     if retry:
         bundle["previous_spec"] = stage._json(spec_path)
@@ -359,6 +456,9 @@ def cmd_card(spec_path: str) -> dict:
     c = _claim()
     spec = json.loads(Path(spec_path).read_text())
     qid = Path(spec_path).stem.replace("spec-", "")
+    prev = stage._json(HERE / "cards" / f"{qid}.json")
+    if prev.get("frozen_sha") and prev.get("spec") != spec:
+        raise SystemExit(f"{qid}: a frozen card exists and its spec differs from {spec_path}; a card is regenerated only from the spec it froze")
     chain = qid.split("-")[-1]
     args_p = HERE / "bundles" / f"args-spec-{qid}.json"
     rung = (stage._json(args_p).get("rung") or None) if args_p.exists() else None
@@ -372,7 +472,7 @@ def cmd_card(spec_path: str) -> dict:
             "kill": {"metric": c["metric"], "threshold": kill_thr, "rule": f"held-out gain < {kill_thr:.2f} (dynamic: max(floor, best/2))",
                      "gpu_h": float(spec.get("schedule", {}).get("gpu_h", c.get("kill_gpu_h_cap", 4))), "cmd": spec["kill_cmd"]},
             "keep": {"rule": f"gain >= {c.get('keep_gain')} on {c.get('keep_networks')} networks, clean_cost <= {c.get('clean_cost_max')}, {c.get('seeds_for_keep')} seeds, CI95 above 0"},
-            "n_required": 1, "cost_gpu_h": float(spec.get("schedule", {}).get("gpu_h", 4)), "cites": ["GOAL"], "frozen_sha": None,
+            "n_required": 1, "cost_gpu_h": float(spec.get("schedule", {}).get("gpu_h", 4)), "cites": ["GOAL"], "frozen_sha": None, "claim_sha": stage.claim_sha(W),
             "chain": chain, "network": spec.get("network"), "phase": "support" if rung else "search", "source": spec.get("source"), "rung": rung,
             "worktree": str(stage.WT_ROOT / f"wt-{qid}"), "spec": spec}
     (HERE / "cards").mkdir(exist_ok=True)
@@ -480,8 +580,13 @@ def cmd_notebook(qid: str) -> dict:
             nb.append({"t": entry["t"], "type": "avoid", "run": qid, "text": f"{card.get('method')} ({qid}) reproduced {other.stem}'s per-seed values exactly: a no-op intervention or a relabel (AAR fingerprint)"})
             break
     nb = [e for e in nb if not (e.get("run") == qid and e.get("type") == "result")] + [entry]
-    if rec.get("kill_hit") and not any(e.get("run") == qid and e.get("type") == "avoid" for e in nb):
-        nb.append({"t": entry["t"], "type": "avoid", "run": qid, "text": f"{card.get('method')} ({qid}, source {card.get('source')}): held-out gain {rec.get('mean')} < kill {card['kill']['threshold']:.2f}"})
+    entry["early_kill"] = bool(rec.get("early_kill")); entry["gate_pass"] = rec.get("gate_pass")
+    if rec.get("kill_hit") and rec.get("gate_pass") and not rec.get("early_kill") and not any(e.get("run") == qid and e.get("type") == "avoid" for e in nb):
+        margin = abs(float(rec.get("mean") or 0) - float(card["kill"]["threshold"]))
+        prov = " (within one seed sd of the kill line: provisional)" if margin < float(_claim().get("seed_sd") or 0) else ""
+        nb.append({"t": entry["t"], "type": "avoid", "run": qid, "text": f"{card.get('method')} ({qid}, source {card.get('source')}): held-out gain {rec.get('mean')} < kill {card['kill']['threshold']:.2f}{prov}"})
+    elif rec.get("early_kill"):
+        nb.append({"t": entry["t"], "type": "note", "run": qid, "text": f"{card.get('method')} ({qid}): early kill by the watchdog at fraction {rec.get('fraction')} — dev-half value {rec.get('mean')} is provisional, not a falsification"})
     if not (rec.get("canary") or {}).get("pass"):
         nb.append({"t": entry["t"], "type": "error", "run": qid, "text": f"canary failed on {qid}; record invalid"})
     (HERE / "notebook.json").write_text(json.dumps(nb, indent=1, ensure_ascii=False))
@@ -500,11 +605,14 @@ def update_map(qid: str, rec: dict, card: dict, patience: int = 2) -> dict | Non
     if qid in (src.get("tried") or []):
         return {"id": sid, "status": src.get("status"), "note": "already counted"}
     src.setdefault("tried", []).append(qid)
-    valid = (rec.get("canary") or {}).get("pass", False)
-    if valid:
+    valid = (rec.get("canary") or {}).get("pass", False) and rec.get("gate_pass") is True
+    margin = float(_claim().get("seed_sd") or 0)            # an improvement smaller than one seed sd is noise, not a new best
+    if valid and rec.get("early_kill"):
+        src["no_improve"] = int(src.get("no_improve") or 0) + 1   # counts toward patience (owner's tradeoff) but never becomes `best`
+    elif valid:
         best_before = max([float(s.get("best") or -1e9) for s in mp["sources"]] + [-1e9])
         mean = float(rec.get("mean") or -1e9)
-        if mean > max(float(src.get("best") or -1e9), best_before):
+        if mean > max(float(src.get("best") or -1e9), best_before) + margin:
             src["best"] = mean; src["no_improve"] = 0
         else:
             src["best"] = max(float(src.get("best") or -1e9), mean) if src.get("best") is not None else mean
@@ -518,7 +626,11 @@ def update_map(qid: str, rec: dict, card: dict, patience: int = 2) -> dict | Non
 
 def cmd_write() -> dict:
     c = _claim()
-    keeps = stage.keep_records(stage.records(HERE), c)
+    recs_all = stage.records(HERE)
+    keeps = stage.keep_records(recs_all, c)
+    by_card = {x["id"]: x for x in stage.cards(HERE)}
+    support = [x for x in recs_all if x["_phase"] == "support" and stage.valid(x, c) and stage._confirmed(x, c)]
+    full = [x for x in support if (by_card.get(x["card"]) or {}).get("rung") and next((rg for rg in stage.support_rungs(c, HERE)["rungs"] if rg["id"] == by_card[x["card"]].get("rung")), {}).get("kind") == "schedule"]
     rules = W / str(_goal_field("manuscript_rules", "paper/.claude/CLAUDE.md"))
     rules_txt = rules.read_text(encoding="utf-8") if rules.exists() else ""
     specs = {k["run"]: stage._json(HERE / "cards" / f"{k['card']}.json").get("spec") for k in keeps}
@@ -526,17 +638,28 @@ def cmd_write() -> dict:
     sections = [str(s) for s in _goal_field("paper_sections", ["paper/merged/sections/06_experiments.tex", "paper/merged/sections/05_method.tex"])]
     for target in sections:
         path = W / target
-        bundle = {"section": str(path), "records": [str(HERE / "records" / f"{k['run']}.md") for k in keeps], "specs": specs,
-                  "mechanism_map": {k: v for k, v in _map().items() if k in ("failure_modes", "mechanisms")},
-                  "board": stage.board(W, HERE), "manuscript_rules": rules_txt, "claim": _claim_core()}
-        task = f"用 bundle 里的 records 和 specs 重写 {path}；每个数字同一行加 `% src: <record path>` 注释；不引入 records 之外的数字；遵守 manuscript_rules 的禁写清单。每个 claim 句后面必须跟它的证据（claim–evidence matrix）；没有证据的句子删掉，不许加强措辞。返回 {{\"written\": path}}。"
+        if re.search(r"method", str(target), re.I):
+            # the method section is written from what was FROZEN before any result (AAR results-free mini-paper), never from the board
+            bundle = {"section": str(path), "method_prose": {k: (v or {}).get("method_prose") for k, v in specs.items()}, "specs": specs,
+                      "mechanism_map": {k: v for k, v in _map().items() if k in ("failure_modes", "mechanisms")}, "manuscript_rules": rules_txt, "claim": _claim_core()}
+            task = f"用 bundle 里冻结的 method_prose 和 specs 重写 {path}：只能改写、展开、排版这些句子，不得加入 method_prose 里没有的主张，不得出现任何数字或结果；遵守 manuscript_rules 的禁写清单。返回 {{\"written\": path}}。"
+        else:
+            bundle = {"section": str(path), "records": [{"path": str(HERE / "records" / f"{k['run']}.md"), "role": "headline (full schedule)" if k in full else ("support: " + str((by_card.get(k["card"]) or {}).get("rung")) if k["_phase"] == "support" else "screen (short schedule kill test + confirm seeds): never a headline number")}
+                                                         for k in keeps + support], "specs": specs,
+                      "mechanism_map": {k: v for k, v in _map().items() if k in ("failure_modes", "mechanisms")},
+                      "board": stage.board(W, HERE), "manuscript_rules": rules_txt, "claim": _claim_core(),
+                      "rule": "主表只用 role=headline 的 record；screen 的数字只能出现在筛选/方法学段落并标明短 schedule 单种子"}
+            task = f"用 bundle 里的 records 和 specs 重写 {path}；每个数字同一行加 `% src: <record path>` 注释（范围数字如种子数、网络数写 `% src: CLAIM.md`）；不引入 records 之外的数字；遵守 manuscript_rules 的禁写清单。每个 claim 句后面必须跟它的证据（claim–evidence matrix）；没有证据的句子删掉，不许加强措辞。实验节必须写明种子数、schedule 长度，以及 kill test 是短 schedule 单种子筛选。返回 {{\"written\": path}}。"
         secs.append({"path": str(path), "prompt": _prompt(task, bundle, {"written": ""}, tools_note="可以 Read bundle 里列出的路径并 Write 目标节；不搜索。")})
     polish = _prompt("对 files 里的节做一次 register 抛光：不动 claim，不加数字，不动 `% src:` 注释。返回 {\"written\": \"...\"}。",
                      {"files": sections, "manuscript_rules": rules_txt},
                      {"written": ""}, tools_note="可以 Read/Write 这两个文件；不搜索。")
     review = _prompt("终审：逐个数字对照其 `% src:` record 文件；任何数字与 record 不符、任何缺 src 的数字、任何 manuscript_rules 禁写项 → block。"
                      "选择性叙事（ARFT E.2）也 block：board 里每个被 kill / 没刷新最好成绩的候选都必须在负结果讨论里出现；只报成功的稿子不通过。每个 claim 句必须能指到一条证据（issues 里列出没有证据的句子）；CLAIM.md 文献核对表里标为“必须讨论”的对照没出现在 related work 也 block。返回 {\"verdict\": \"pass|block\", \"issues\": [\"file:line — why\"]}。",
-                     {"files": sections, "records_dir": str(HERE / "records"), "manuscript_rules": rules_txt, "board": stage.board(W, HERE)},
+                     {"files": sections, "records_dir": str(HERE / "records"), "manuscript_rules": rules_txt, "board": stage.board(W, HERE),
+                      "run_dirs": [str(stage.results_dir(stage._json(HERE / "cards" / f"{k['card']}.json"), k["run"])) for k in keeps],
+                      "method_prose": {k: (v or {}).get("method_prose") for k, v in specs.items()},
+                      "rule": "从 run_dirs 的 seed_*.json 重新算 mean / CI95 并与 tex 对照；读 blockers.json；05_method 不得含 method_prose 之外的主张；任何矛盾 → block"},
                      {"verdict": "pass|block", "issues": []}, tools_note="可以 Read 这两个文件与 records/；不改任何文件；不搜索。")
     return {"sections": secs, "polish_prompt": polish, "review_prompt": review}
 
@@ -549,12 +672,32 @@ def cmd_pivot() -> dict:
     return {"prompt": _prompt(task, bundle, {"verdict": "", "reasons": [], "associations": []})}
 
 
+def cmd_waive(qid: str, why: str) -> dict:
+    if len(str(why).strip()) < 20:
+        raise SystemExit("waive needs a real reason (>= 20 chars)")
+    with (HERE / "ledger.jsonl").open("a") as fh:
+        fh.write(json.dumps({"event": "waive", "run": qid, "why": why, "by": os.environ.get("USER", "owner"), "t": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
+    return {"waived": qid, "why": why}
+
+
 def cmd_queue(qid: str, text: str) -> dict:
     p = HERE / "queue.json"
     q = stage._json_list(p)
+    if any(e.get("qid") == qid for e in q):
+        return {"queued": qid, "text": text, "note": "already queued"}
     q.append({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "qid": qid, "chain": qid.split("-")[-1], "text": text})
     p.write_text(json.dumps(q, indent=1, ensure_ascii=False))
-    return {"queued": qid, "text": text}
+    out = {"queued": qid, "text": text}
+    card = stage._json(HERE / "cards" / f"{qid}.json")
+    mp = _map()
+    src = next((s for s in mp.get("sources", []) if s.get("id") == card.get("source")), None) if card and mp else None
+    if src is not None and src.get("status") != "dropped":
+        src["queued"] = int(src.get("queued") or 0) + 1        # a source whose candidates keep dying before a record is not open forever
+        if src["queued"] >= 2 and src.get("status") != "exhausted":
+            src["status"] = "exhausted"; src["drop_reason"] = "two candidates queued before any record"
+        (HERE / "mechanism-map.json").write_text(json.dumps(mp, indent=1, ensure_ascii=False))
+        out["map"] = {"id": src["id"], "status": src["status"], "queued": src["queued"]}
+    return out
 
 
 def main() -> int:
@@ -568,12 +711,14 @@ def main() -> int:
     for name in ("token", "notebook"):
         p = sub.add_parser(name); p.add_argument("qid")
     p = sub.add_parser("queue"); p.add_argument("qid"); p.add_argument("text")
+    p = sub.add_parser("waive", help="owner only: accept a run's high blocker with a reason (a ledger event, never an edit)"); p.add_argument("qid"); p.add_argument("why")
     a = ap.parse_args()
     for d in ("bundles", "gates", "build", "monitor", "reports"):
         (HERE / d).mkdir(exist_ok=True)
     out = {"A": lambda: cmd_A(), "M": lambda: cmd_M(), "mechanism-finish": lambda: cmd_mechanism_finish(a.out), "write": lambda: cmd_write(), "pivot": lambda: cmd_pivot(),
            "spec": lambda: cmd_spec(a.chain, a.retry, a.rung), "card": lambda: cmd_card(a.spec_path), "build": lambda: cmd_build(a.qid, a.fix),
-           "token": lambda: cmd_token(a.qid), "notebook": lambda: cmd_notebook(a.qid), "queue": lambda: cmd_queue(a.qid, a.text)}[a.cmd]()
+           "token": lambda: cmd_token(a.qid), "notebook": lambda: cmd_notebook(a.qid), "queue": lambda: cmd_queue(a.qid, a.text),
+           "waive": lambda: cmd_waive(a.qid, a.why)}[a.cmd]()
     print(json.dumps(out, ensure_ascii=False))
     return 0
 

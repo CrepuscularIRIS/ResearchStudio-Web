@@ -68,3 +68,17 @@ def test_write_guard_decisions(tmp_path):
     assert g.decide("Bash", {"command": f"cp a.json {tmp_path}/.research/records/Q-1.json"}, prot, tmp_path)
     assert g.decide("Bash", {"command": "python3 .research/stage.py board"}, prot, tmp_path) is None
     assert g.decide("Bash", {"command": "git diff research-trunk > /tmp/d.txt"}, prot, tmp_path) is None
+
+
+def test_write_guard_ignores_stderr_redirect_and_guards_the_map():
+    wg = load("write-guard")
+    assert wg.WRITE_VERB.search("cat .research/records/Q.json 2>&1 | head") is None, "2>&1 is not a write"
+    assert wg.WRITE_VERB.search("echo x > .research/records/Q.json") is not None
+    assert any(g.endswith("mechanism-map.json") for g in wg.GUARDED) and any(g.endswith("cards") for g in wg.GUARDED)
+
+
+def test_dispatch_guard_bare_doc_dir_names_nothing():
+    dg = load("dispatch-guard")
+    named = dg.named_paths("Use only what this prompt carries. Do not read .research/, plan/, or paper/. Text: .research/lit/papers/x.txt")
+    assert ".research" not in named and ".research/lit/papers/x.txt" in named
+    assert dg.decide("Read", {"file_path": ".research/mechanism-map.json"}, "LANE: researcher\nMODE: SEARCH\nDo not read .research/", 0, "researcher", named) is not None

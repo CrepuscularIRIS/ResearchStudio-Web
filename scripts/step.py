@@ -10,7 +10,7 @@
   record <Q>                → (cp confirm seeds) render_record → gate.py record → notebook + map → launches the confirm seeds on a band hit
 """
 from __future__ import annotations
-import argparse, json, os, shutil, subprocess, sys
+import argparse, json, os, shutil, subprocess, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -61,11 +61,15 @@ def propose(chain: str, retry: bool = False, rung: str | None = None) -> int:
     return 0
 
 
-def propose_finish(qid: str) -> int:
+def propose_finish(qid: str, out_path: str | None = None) -> int:
     chain = qid.split("-")[-1]
     spec_p = HERE / "bundles" / f"spec-{qid}.json"
+    if not spec_p.exists() and out_path and Path(out_path).exists():
+        out = stage._json(Path(out_path))
+        if isinstance(out.get("spec"), dict) and out["spec"]:
+            spec_p.write_text(json.dumps(out["spec"], indent=1, ensure_ascii=False))     # the returned object is authoritative; Fable's Write is a convenience
     if not spec_p.exists():
-        say(f"no spec at {spec_p}: the scientist wrote nothing → python3 .research/bundle.py queue {qid} \"spec workflow returned nothing\""); return 1
+        say(f"no spec at {spec_p}: the scientist wrote nothing → python3 .research/bundle.py queue {qid} \"spec workflow returned nothing (infrastructure)\""); return 1
     if not (HERE / "gates" / f"{qid}.spec.ok").exists():
         r = py(str(HERE / "gate.py"), "spec", qid)
         if r.returncode:
@@ -92,9 +96,16 @@ def propose_finish(qid: str) -> int:
     wt = Path(card["worktree"])
     if not wt.exists():
         repo = stage.load_goal_repo(W)
-        r = sh(["git", "-C", str(repo), "worktree", "add", str(wt), "-b", f"exp/{qid}", "research-trunk"])
+        sh(["git", "-C", str(repo), "worktree", "prune"])
+        has_branch = sh(["git", "-C", str(repo), "rev-parse", "--verify", "-q", f"exp/{qid}"]).returncode == 0
+        r = sh(["git", "-C", str(repo), "worktree", "add", str(wt), f"exp/{qid}"] if has_branch else ["git", "-C", str(repo), "worktree", "add", str(wt), "-b", f"exp/{qid}", "research-trunk"])
         if r.returncode:
             say("worktree add failed:", r.stderr.strip()); return 1
+        links = subprocess.run(["git", "-C", str(repo), "ls-files", "-s", "research-trunk"], capture_output=True, text=True).stdout
+        gitlinks = [l.split()[-1] for l in links.splitlines() if l.startswith("160000")]
+        if gitlinks:
+            say(f"WARNING: research-trunk keeps {gitlinks[:4]} as gitlinks (nested repos): the worktree has them EMPTY and no edit inside them can be reviewed; "
+                f"the owner should track that code as files on research-trunk before any candidate touches it")
     say(f"{qid}: spec gated, card frozen ({card['frozen_sha'][:12]}), worktree {wt}", f"next: python3 .research/step.py build {qid}")
     return 0
 
@@ -112,12 +123,25 @@ def build(qid: str, fix: bool = False) -> int:
 
 
 def build_finish(qid: str, out_path: str, gpu: int | None = None) -> int:
-    out = stage._json(Path(out_path))
+    out_p = Path(out_path)
+    out = stage._json(out_p)
     card = stage._json(HERE / "cards" / f"{qid}.json")
     (HERE / "build").mkdir(exist_ok=True)
-    (HERE / "build" / f"{qid}.json").write_text(json.dumps(out.get("build") or {}, indent=1, ensure_ascii=False))
     mon_p = HERE / "monitor" / f"{qid}.json"
-    if not (stage._json(mon_p).get("approved") and stage._json(mon_p).get("diff_sha")):
+    fresh = bool(out.get("monitor")) and (not mon_p.exists() or out_p.stat().st_mtime > mon_p.stat().st_mtime)
+    if fresh and (out.get("build") is None or (out.get("monitor") or {}).get("grok") is None):
+        infra_p = HERE / "build" / f"{qid}.infra"
+        n_infra = int(infra_p.read_text().strip() or 0) + 1 if infra_p.exists() else 1
+        infra_p.write_text(f"{n_infra}\n")
+        out_p.rename(out_p.with_suffix(f".null{n_infra}.json"))          # not a verdict: never gate an empty output
+        if n_infra >= 2:
+            say(f"{qid}: builder/monitor returned nothing twice → python3 .research/bundle.py queue {qid} \"build workflow returned nothing twice (infrastructure)\"")
+        else:
+            say(f"{qid}: builder or monitor lens returned nothing (infrastructure failure, not a rejection) → python3 .research/step.py build {qid}{' --fix' if (HERE / 'build' / f'{qid}.fixes').exists() else ''}")
+        return 1
+    if fresh:
+        (HERE / "build" / f"{qid}.json").write_text(json.dumps(out.get("build") or {}, indent=1, ensure_ascii=False))
+    if fresh or not (stage._json(mon_p).get("approved") and stage._json(mon_p).get("diff_sha")):
         tmp = HERE / "bundles" / f"monitor-out-{qid}.json"
         tmp.write_text(json.dumps(out.get("monitor") or {}, indent=1, ensure_ascii=False))
         r = py(str(HERE / "gate.py"), "monitor", qid, str(tmp))
@@ -129,12 +153,21 @@ def build_finish(qid: str, out_path: str, gpu: int | None = None) -> int:
             else:
                 say(f"→ python3 .research/step.py build {qid} --fix   # one fix round, then queue")
             return 1
-    if not (HERE / "tokens" / f"{qid}.clean").exists():
-        r = py(str(HERE / "bundle.py"), "token", qid)
-        if r.returncode:
-            say(r.stderr.strip()); return 1
+    import gate  # noqa: E402
+    _, sha_now = gate.diff_of(card["worktree"])
+    if sha_now != stage._json(mon_p).get("diff_sha"):
+        for p in (HERE / "tokens" / f"{qid}.clean", mon_p):
+            p.unlink(missing_ok=True)
+        say(f"{qid}: the worktree diff changed after the monitor approved it (sha {sha_now[:12]}); token and approval withdrawn → python3 .research/step.py build {qid}")
+        return 1
+    (HERE / "tokens" / f"{qid}.clean").unlink(missing_ok=True)      # always re-mint: the token names the CURRENT diff sha
+    r = py(str(HERE / "bundle.py"), "token", qid)
+    if r.returncode:
+        say(r.stderr.strip()); return 1
     if stage.unit_active(qid):
         say(f"research-{qid}.service already active — wait"); return 0
+    if stage.last_exit(HERE, qid) == 5:
+        (HERE / "build" / f"{qid}.relaunched").write_text("1\n")   # one relaunch after a stall; the navigator queues the second
     claim = stage.load_claim(W) or {}
     g = gpu if gpu is not None else int((claim.get("chains") or {}).get(qid.split("-")[-1], {}).get("gpu", 0))
     env = {**os.environ, "GPU": str(g), "SEEDS": "0"}
@@ -164,26 +197,72 @@ def record(qid: str, gpu: int | None = None) -> int:
     r = py(str(HERE / "gate.py"), "record", str(HERE / "records" / f"{qid}.json"), str(HERE / "cards" / f"{qid}.json"))
     say("record gate: " + (r.stdout.strip() or r.stderr.strip()))
     gate_ok = r.returncode == 0
+    rec_p = HERE / "records" / f"{qid}.json"
+    rec = stage._json(rec_p)
+    rec["gate_pass"] = gate_ok                                   # script-written: the verdict every reader consumes (stage.valid)
+    rec["gate_fails"] = [l for l in (r.stdout.strip().splitlines()[1:] if not gate_ok else [])][:8]
+    rec_p.write_text(json.dumps(rec, indent=1, ensure_ascii=False))
+    if not gate_ok:
+        why = "record refused by gate.py record: " + "; ".join(rec["gate_fails"])[:300]
+        r3 = py(str(HERE / "bundle.py"), "queue", qid, why)
+        say(r3.stdout.strip() or r3.stderr.strip(), f"{qid}: not counted (no notebook/map update); the chain moves on. Owner: queue.json")
+        return 1
     r2 = py(str(HERE / "bundle.py"), "notebook", qid)
     say(r2.stdout.strip() or r2.stderr.strip())
-    rec = stage._json(HERE / "records" / f"{qid}.json")
+    if r2.returncode:
+        say(f"{qid}: notebook/map update failed; stage.py will print `bundle.py notebook {qid}` until it lands"); return 1
     claim = stage.load_claim(W) or {}
     need = int(claim.get("seeds_for_keep", 3))
-    if gate_ok and rec.get("band_hit") and int(rec.get("n_realized", 0)) < need and not any(conf.glob("seed_*.json") if conf.exists() else []):
+    missing = [k for k in range(need) if not (res / f"seed_{k}.json").exists()]
+    if rec.get("band_hit") and not rec.get("early_kill") and missing:
+        att_p = HERE / "build" / f"{qid}.confirm_attempts"
+        n_att = int(att_p.read_text().strip() or 0) if att_p.exists() else 0
+        if n_att >= 2:
+            r3 = py(str(HERE / "bundle.py"), "queue", qid, f"confirm launched twice, still missing seeds {missing} (unit exit {stage.last_exit(HERE, f'{qid}-confirm')})")
+            say(r3.stdout.strip() or r3.stderr.strip()); return 1
         g = gpu if gpu is not None else int((claim.get("chains") or {}).get(qid.split("-")[-1], {}).get("gpu", 0))
-        seeds = ",".join(str(s) for s in range(1, need))
+        seeds = ",".join(str(s) for s in missing)
         env = {**os.environ, "GPU": str(g), "SEEDS": seeds}
         r = subprocess.run(["bash", str(W / "bin" / "run_protected.sh"), f"{qid}-confirm", qid, "40G", card["kill"]["cmd"]], cwd=str(W), env=env, capture_output=True, text=True)
-        say(r.stdout.strip(), r.stderr.strip(), f"band hit → {'launched' if r.returncode == 0 else 'REFUSED'} research-{qid}-confirm.service (SEEDS={seeds}); re-run `step.py record {qid}` when it ends")
+        if r.returncode == 0:
+            att_p.write_text(f"{n_att + 1}\n")
+        say(r.stdout.strip(), r.stderr.strip(), f"band hit → {'launched' if r.returncode == 0 else 'REFUSED'} research-{qid}-confirm.service (SEEDS={seeds}, attempt {n_att + 1}); re-run `step.py record {qid}` when it ends")
         return r.returncode
     say(f"{qid}: {'KEEP candidate confirmed' if rec.get('band_hit') and int(rec.get('n_realized', 0)) >= need else 'recorded'}; next: python3 .research/stage.py")
     return 0 if gate_ok else 1
 
 
+def write_finish(out_path: str) -> int:
+    out = stage._json(Path(out_path))
+    rev = out.get("review") if isinstance(out.get("review"), dict) else None
+    (HERE / "gates").mkdir(exist_ok=True)
+    if not rev or rev.get("verdict") not in ("pass", "block"):
+        (HERE / "gates" / "write-review.json").unlink(missing_ok=True)
+        say("write workflow returned no review verdict (infrastructure failure, not a pass): re-run Workflow(write)"); return 1
+    rev = {**rev, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "written": out.get("written")}
+    (HERE / "gates" / "write-review.json").write_text(json.dumps(rev, indent=1, ensure_ascii=False))
+    say(f"final review: {rev['verdict']}" + ("" if rev["verdict"] == "pass" else " — " + "; ".join(str(x) for x in (rev.get("issues") or [])[:5])), "next: python3 .research/stage.py")
+    return 0 if rev["verdict"] == "pass" else 1
+
+
+def pivot_finish(out_path: str) -> int:
+    out = stage._json(Path(out_path))
+    (HERE / "gates").mkdir(exist_ok=True)
+    if not out.get("verdict"):
+        say(f"pivot workflow returned no verdict ({out.get('error') or 'empty'}): infrastructure failure, not an exit — re-run Workflow(pivot)"); return 1
+    p = HERE / "gates" / f"pivot-{time.strftime('%Y%m%dT%H%M%S')}.json"
+    p.write_text(json.dumps({**out, "t": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=1, ensure_ascii=False))
+    say(f"pivot verdict saved to {p}: {out['verdict']}", *[f"  - {x}" for x in (out.get("reasons") or [])[:5]],
+        "owner: (a) ship the incumbent, (b) edit CLAIM.md and re-accept, (c) python3 .research/step.py mechanism  (new_sources: the associations feed the next map)")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("mechanism"); p.add_argument("--finish")
-    p = sub.add_parser("propose"); p.add_argument("chain", nargs="?"); p.add_argument("--finish"); p.add_argument("--retry", action="store_true"); p.add_argument("--rung")
+    p = sub.add_parser("propose"); p.add_argument("chain", nargs="?"); p.add_argument("--finish"); p.add_argument("out", nargs="?"); p.add_argument("--retry", action="store_true"); p.add_argument("--rung")
+    p = sub.add_parser("write"); p.add_argument("--finish", required=True)
+    p = sub.add_parser("pivot"); p.add_argument("--finish", required=True)
     p = sub.add_parser("status"); p.add_argument("qid")
     p = sub.add_parser("build"); p.add_argument("qid"); p.add_argument("--finish"); p.add_argument("--fix", action="store_true"); p.add_argument("--gpu", type=int)
     p = sub.add_parser("record"); p.add_argument("qid"); p.add_argument("--gpu", type=int)
@@ -193,7 +272,11 @@ def main() -> int:
     if a.cmd == "mechanism":
         return mechanism(a.finish)
     if a.cmd == "propose":
-        return propose_finish(a.finish) if a.finish else propose(a.chain, a.retry, a.rung)
+        return propose_finish(a.finish, a.out or a.chain) if a.finish else propose(a.chain, a.retry, a.rung)
+    if a.cmd == "write":
+        return write_finish(a.finish)
+    if a.cmd == "pivot":
+        return pivot_finish(a.finish)
     if a.cmd == "status":
         card = stage._json(HERE / "cards" / f"{a.qid}.json")
         for run in (a.qid, f"{a.qid}-confirm"):

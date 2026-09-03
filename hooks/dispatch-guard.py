@@ -90,6 +90,7 @@ def _rel(p: str) -> str:
 def named_paths(prompt: str, workspace: Path = W) -> set[str]:
     """Paths the dispatch names, plus every path inside a BRIEF: file it names."""
     found = {_rel(p) for p in PATH_RX.findall(prompt)}
+    found = {p for p in found if p.rstrip("/") + "/" not in DOC_DIRS}      # a bare `.research/` in an ISOLATION sentence names nothing
     for p in list(found):
         if "/briefs/" in p or p.startswith(".research/briefs/"):
             bp = workspace / p

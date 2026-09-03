@@ -13,12 +13,15 @@ CARD_P="$R/cards/$CARD.json"; TOKEN="$R/tokens/$CARD.clean"; UNIT="research-$RUN
 GPU_ID="${GPU:-1}"
 
 [ -f "$CARD_P" ] || { echo "REFUSED: no card $CARD_P" >&2; exit 1; }
-read -r SHA WT GPUH < <(python3 - "$CARD_P" <<'EOF'
+read -r SHA WT GPUH CARD_METRIC CANARY_EXPECTED CANARY_TOL < <(python3 - "$CARD_P" <<'EOF'
 import json, sys
-c = json.load(open(sys.argv[1]))
-print(c.get("frozen_sha") or "-", c.get("worktree") or "-", float((c.get("kill") or {}).get("gpu_h") or 4))
+c = json.load(open(sys.argv[1])); can = ((c.get("spec") or {}).get("canary") or {})
+print(c.get("frozen_sha") or "-", c.get("worktree") or "-", float((c.get("kill") or {}).get("gpu_h") or 4), (c.get("prediction") or {}).get("metric") or "-",
+      can.get("expected", "-"), can.get("tol", "-"))
 EOF
 )
+CSHA=$(python3 "$R/gate.py" cardsha "$CARD_P" 2>/dev/null || echo "-")
+[ "$CSHA" = "$SHA" ] || { echo "REFUSED: card $CARD content sha $CSHA != frozen_sha $SHA (the card was edited after freeze)" >&2; exit 1; }
 [ "$SHA" != "-" ] || { echo "REFUSED: card $CARD is not frozen (gate.py freeze)" >&2; exit 1; }
 python3 "$R/gate.py" card "$CARD_P" > /dev/null || { echo "REFUSED: gate.py card failed for $CARD" >&2; exit 1; }
 [ "$WT" != "-" ] && [ -d "$WT" ] || { echo "REFUSED: card $CARD names no existing worktree ($WT)" >&2; exit 1; }
@@ -47,12 +50,24 @@ for u in $(systemctl --user list-units --state=active --plain --no-legend 'resea
     env_line=$(systemctl --user show -p Environment "$u" 2>/dev/null || true)
     case "$env_line" in *"CUDA_VISIBLE_DEVICES=$GPU_ID"*) echo "REFUSED: $u already runs on GPU $GPU_ID" >&2; exit 1 ;; esac
 done
+# what runs must be what was reviewed: no populated gitlink dirs, no symlinks escaping the worktree, no ignored code files
+for gl in $(git -C "$WT" ls-files -s 2>/dev/null | awk '$1=="160000"{print $4}'); do
+    [ -d "$WT/$gl" ] && [ -n "$(ls -A "$WT/$gl" 2>/dev/null)" ] && { echo "REFUSED: $gl is a gitlink (nested repo) with content in the worktree: that code is invisible to review — track it as files on research-trunk" >&2; exit 1; }
+done
+while IFS= read -r lnk; do
+    [ -z "$lnk" ] && continue
+    tgt=$(readlink -f "$WT/$lnk" 2>/dev/null || true)
+    case "$tgt" in "$WT"/*) ;; *) echo "REFUSED: symlink $lnk resolves outside the worktree ($tgt)" >&2; exit 1 ;; esac
+done < <(git -C "$WT" ls-files -s 2>/dev/null | awk '$1=="120000"{print $4}'; find "$WT" -maxdepth 3 -type l -not -path '*/results/*' -not -path '*/.git/*' -printf '%P\n' 2>/dev/null)
+IGN=$(git -C "$WT" status --ignored --porcelain 2>/dev/null | awk '$1=="!!"{print $2}' | grep -Ev '^(results/|logs/|__pycache__/|.*/__pycache__/|.*\.(pth|pt|log)$)' | grep -E '\.(py|yaml|yml|json|sh)$' || true)
+[ -z "$IGN" ] || { echo "REFUSED: ignored code files present in the worktree (they would run but were never in the reviewed diff): $(echo "$IGN" | head -5 | tr '\n' ' ')" >&2; exit 1; }
 RESULTS_DIR="$WT/results/$RUN"
-rm -rf "$RESULTS_DIR"; mkdir -p "$RESULTS_DIR"
+case "$RUN" in *-confirm) mkdir -p "$RESULTS_DIR" ;; *) rm -rf "$RESULTS_DIR"; mkdir -p "$RESULTS_DIR" ;; esac
 printf '{"event": "start", "run": "%s", "card": "%s", "gpu": "%s", "mem": "%s", "seeds": "%s", "smoke_first": %s, "t": "%s"}\n' \
   "$RUN" "$CARD" "$GPU_ID" "$MEM" "${SEEDS:-0}" "$SMOKE_FIRST" "$(date -Iseconds)" >> "$R/ledger.jsonl"
 exec systemd-run --user --unit="$UNIT" --collect \
     -p "MemoryMax=$MEM" -p "WorkingDirectory=$WT" -p "RuntimeMaxSec=$MAXSEC" \
     -E "CUDA_VISIBLE_DEVICES=$GPU_ID" -E "RESULTS_DIR=$RESULTS_DIR" -E "SMOKE_FIRST=$SMOKE_FIRST" -E "SEEDS=${SEEDS:-0}" \
-    -E "EARLY_AT=$EARLY_AT" -E "EARLY_MIN=$EARLY_MIN" -E "STALL_MIN=$STALL_MIN" \
+    -E "EARLY_AT=$EARLY_AT" -E "EARLY_MIN=$EARLY_MIN" -E "STALL_MIN=$STALL_MIN" -E "CARD_METRIC=$CARD_METRIC" \
+    -E "CANARY_EXPECTED=$CANARY_EXPECTED" -E "CANARY_TOL=$CANARY_TOL" \
     bash "$R/launch_wrap.sh" "$RUN" "$CARD" -- "$@"

@@ -32,7 +32,7 @@ const FM = {
 const SOURCES = {
   type: 'object', required: ['sources'],
   properties: { sources: { type: 'array', items: { type: 'object', required: ['mechanism', 'domain', 'name', 'isomorphism', 'disanalogy', 'query'],
-    properties: { mechanism: { type: 'string' }, domain: { type: 'string' }, name: { type: 'string' }, isomorphism: { type: 'string' }, disanalogy: { type: 'string' }, query: { type: 'string' }, naive_in_A: { type: 'string' } } } } },
+    properties: { mechanism: { type: 'string' }, domain: { type: 'string' }, name: { type: 'string' }, isomorphism: { type: 'string' }, disanalogy: { type: 'string' }, query: { type: 'string' }, naive_in_A: { type: 'string' }, pattern: { type: 'string' } } } } },
 }
 const RECIPE = {
   type: 'object', required: ['recipe', 'precedent'],
@@ -61,6 +61,7 @@ const divergePrompt = [
   '`query` = a 6-12 word literature query in C\'s own vocabulary (no RGB/depth/segmentation words). Do not propose methods; do not cite papers from memory.',
   'Divergence vocabulary (use as lenses, not as a checklist): assumption_audit_and_pivot · architectural_operator_substitution · reframe_as_solvable_object · unify_into_shared_representation · structural_prior_encoding · algebraic_equivalence · heterogeneous_decomposition · decompose_and_delegate · relax_discrete_to_continuous · adapt_via_conditioning · characterize_limit_then_surpass · controlled_diagnostic_design.',
   'Structure, not vocabulary: a C that only shares words with M (ARFT B.5) is not a source. For each C also say in one clause what the NAIVE version of the mechanism in A would be, so a later spec must beat it.',
+  'Tag each C with the one lens (`pattern`) it mainly uses, and give at most two Cs per pattern per mechanism — six variants of one move are not six sources. Mature, textbook mechanisms (pre-2015, other fields) are wanted; the query must be answerable in C\'s own literature.',
   ISOLATION,
 ].join('\n')
 const div = await agent(divergePrompt + '\n\nStructured output only.', { agentType: 'explorer', label: 'diverge', phase: 'Diverge', schema: SOURCES, stallMs: 900000 })
@@ -71,21 +72,22 @@ log(`C: ${candidates.length} source domains (${div.sources.length - candidates.l
 
 phase('Retrieve')
 const retrievePrompt = (s) => [
+  'LANE: researcher', 'MODE: SEARCH',
   '## Retrieve: one recipe gene + precedent for one source domain',
   `Claim under test (A): "${A.claim}"`, `Mechanism: ${s.mechanism}`, `Source domain C: ${s.domain} — ${s.name}`, `Isomorphism: ${s.isomorphism}`, '',
-  `1. Run: python3 ${A.search} --query "${String(s.query).replace(/"/g, '')}" --start-year 2015 --end-year 2026 --max-papers 6 --json`,
+  `1. Run: python3 ${A.search} --query "${String(s.query).replace(/"/g, '')}" --start-year 1950 --end-year 2026 --max-papers 6 --json`,
   '   Pick the ONE paper that gives the mechanism as a PROCEDURE (equations/steps), not a survey. Text: look in the local library first',
   `   (ls ${A.library} | grep -i for the id or title words; pdftotext -layout <pdf> .research/lit/papers/<id>.txt), else python3 .research/fetch_text.py --one <arxiv-id>.`,
   '   If no text can be obtained, return recipe.steps = [] and text_path = "".',
   '2. From the text extract the recipe gene: ≤4 PROCEDURAL steps (what they actually do), one AVOID (their own stated failure or limitation),',
   '   the single key number that proves the mechanism with its verbatim quote and the LINE NUMBER in the .txt.',
   `3. Precedent: run the search once more with "${String(s.name).replace(/"/g, '')} ${A.a_terms.join(' ')}" (--max-papers 6 --json). precedent.found = true ONLY if a`,
-  '   paper already applies this mechanism to A (RGB-D / wrong-depth / multimodal-corruption segmentation); then give the paper id and a quote. Otherwise found = false.',
+  '   paper already applies this mechanism to A (RGB-D / wrong-depth / multimodal-corruption segmentation); then give the paper id and a verbatim quote of at least 8 words from its abstract. Otherwise found = false (a bare boolean drops nothing).',
   ISOLATION,
 ].join('\n')
 const sources = (await parallel(candidates.map((s) => () =>
   agent(retrievePrompt(s), { agentType: 'researcher', label: `recipe:${String(s.domain).slice(0, 18)}`, phase: 'Retrieve', schema: RECIPE, stallMs: 600000 })
-    .then((r) => r ? { ...s, recipe: r.recipe, precedent: r.precedent } : { ...s, recipe: null, precedent: null, error: 'researcher returned nothing' })
+    .then((r) => r ? { ...s, recipe: r.recipe, precedent: r.precedent } : { ...s, recipe: null, precedent: null, error: 'researcher returned nothing (infrastructure; status error, not dropped)' })
 ))).filter(Boolean)
 const withRecipe = sources.filter((s) => s.recipe && s.recipe.steps && s.recipe.steps.length).length
 const withPrecedent = sources.filter((s) => s.precedent && s.precedent.found).length

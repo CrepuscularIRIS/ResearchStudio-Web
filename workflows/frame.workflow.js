@@ -7,7 +7,7 @@ export const meta = {
 }
 const A = (typeof args === 'string' ? JSON.parse(args) : args) || {}
 const r = await agent(A.prompt + '\n\nStructured output only.', {
-  agentType: 'scientist', label: 'frame', phase: 'Frame',
+  agentType: 'scientist', stallMs: 900000, label: 'frame', phase: 'Frame',
   schema: { type: 'object', required: ['written'], properties: { written: { type: 'string' } } },
 })
 if (!r) return { written: '', error: 'scientist returned nothing' }

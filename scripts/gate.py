@@ -332,6 +332,43 @@ def check_record(rec: dict, card: dict) -> list[str]:
     return fails
 
 
+def _waived(ledger: Path, run: str) -> str | None:
+    if not ledger.exists():
+        return None
+    for line in ledger.read_text(errors="ignore").splitlines():
+        try:
+            e = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if e.get("event") == "waive" and e.get("run") == run:
+            return str(e.get("why"))
+    return None
+
+
+def deliverables(rdir: Path = HERE) -> list[str]:
+    """The paper is done only when: the final review passed, every section passes the numbers gate, and main.pdf is newer than every section."""
+    w = rdir.parent
+    fails = []
+    rev = json.loads((rdir / "gates" / "write-review.json").read_text()) if (rdir / "gates" / "write-review.json").exists() else {}
+    if rev.get("verdict") != "pass":
+        fails.append(f"final review verdict is {rev.get('verdict')!r}, not pass (step.py write --finish <out>)")
+    goal = load_goal(w)
+    secs_dir = w / str((goal.get("campaign") or {}).get("paper_dir", "paper/merged")) / "sections"
+    secs = sorted(secs_dir.glob("*.tex")) if secs_dir.exists() else []
+    if not secs:
+        fails.append(f"no sections under {secs_dir}")
+    for t in secs:
+        fails += [f"{t.name}: {f}" for f in check_numbers(t.read_text(encoding="utf-8"), rdir)]
+    pdf = secs_dir.parent / "main.pdf"
+    if not pdf.exists():
+        fails.append("main.pdf missing: latexmk did not run")
+    elif secs and pdf.stat().st_mtime < max(t.stat().st_mtime for t in secs):
+        fails.append("main.pdf is older than a section: rebuild")
+    if not fails:
+        (rdir / "DONE").write_text(f"deliverables gate passed {time.strftime('%Y-%m-%dT%H:%M:%S')}: review pass, {len(secs)} sections numbers-clean, main.pdf fresh\n")
+    return fails
+
+
 def _ledger_windows(ledger: Path, runs: set[str]) -> list[tuple[float, float, int]]:
     out = []
     if not ledger.exists():
@@ -384,11 +421,24 @@ def record_provenance(rec: dict, card: dict, rdir: Path = HERE) -> list[str]:
             bl = json.loads((rdir_results / "blockers.json").read_text())
         except json.JSONDecodeError:
             bl = []; fails.append("blockers.json: not JSON")
+        bm = (rdir_results / "blockers.json").stat().st_mtime
+        if windows and not any(w[0] <= bm <= w[1] for w in windows):
+            fails.append("blockers.json was written outside the launcher window (edited by hand?) — a waiver is a ledger event: bundle.py waive <Q> \"<why>\"")
+        waived = _waived(rdir / "ledger.jsonl", run)
         for b in [x for x in bl if isinstance(x, dict) and str(x.get("severity", "")).lower() in ("high", "critical")][:3]:
+            if waived:
+                continue
             fails.append(f"high blocker written by the run itself: {str(b.get('text', ''))[:120]} — a named flaw is not a fixed one "
-                         f"(ARFT rule 9): one fix round, or the owner lowers it in blockers.json by hand and says why in the spec")
+                         f"(ARFT rule 9): one fix round, or the owner waives it with a reason: bundle.py waive {run} \"<why>\"")
     if seeds and not run.endswith("-confirm") and not (rdir_results / "progress.json").exists():
         fails.append("progress.json missing: the command never reported a checkpoint (the watchdog contract)")
+    elif seeds and not run.endswith("-confirm") and any(w[2] == 0 for w in windows):
+        try:
+            frac = float((json.loads((rdir_results / "progress.json").read_text()) or {}).get("fraction") or 0)
+        except (json.JSONDecodeError, ValueError, TypeError):
+            frac = 0.0
+        if frac < 0.95:
+            fails.append(f"unit exited 0 but progress.json fraction is {frac:.2f} < 0.95: the schedule did not finish (or the command wrote the fraction itself and stopped)")
     idx = sorted(int(re.sub(r"\D", "", sp.stem) or 0) for sp in seeds)
     if idx and idx != list(range(len(idx))):
         fails.append(f"seed indices not contiguous from 0: {idx} (a seed was dropped or chosen)")
@@ -459,6 +509,13 @@ def check_spec(spec: dict, claim: dict, repo: Path, cap_gpu_h: float) -> list[st
     for k in ("rationale_line", "naive_baseline"):
         if len(str(spec.get(k, "")).strip()) < 20:
             fails.append(f"{k}: one real sentence required (AAR one-line rationale / ResearchStudio naive baseline)")
+    mp = str(spec.get("method_prose", "")).strip()
+    if len(mp) < 200:
+        fails.append("method_prose: 6-12 sentences of method text are required before any result exists (frozen with the card)")
+    elif re.search(r"\d+\.\d+|\bmIoU\b|outperform|improv(e|es|ed|ement)|better than|state[- ]of[- ]the[- ]art", mp, re.I):
+        fails.append("method_prose: no numbers, no results, no comparatives — it is written before the run and reused verbatim")
+    if re.search(r"(^|[\s;&|])(pip|git|curl|wget|conda|apt(-get)?)\s", cmd) or re.search(r"(^|[\s=:'\"])/(home|root|mnt|data)/", cmd):
+        fails.append("kill_cmd: no package installs, no git, no downloads, no absolute paths outside the worktree (what runs must be what was reviewed)")
     return fails
 
 
@@ -495,13 +552,31 @@ def gate_spec(qid: str, rdir: Path = HERE) -> int:
     goal = load_goal(rdir.parent)
     repo = rdir.parent / str(goal["campaign"].get("repo_root", "."))
     cap = float(claim.get("kill_gpu_h_cap", goal["campaign"].get("kill_cap_gpu_h", 4)))
+    args0 = json.loads((rdir / "bundles" / f"args-spec-{qid}.json").read_text()) if (rdir / "bundles" / f"args-spec-{qid}.json").exists() else {}
+    if args0.get("mode") == "support" or args0.get("rung"):
+        cap = float(claim.get("support_gpu_h_cap", 40))          # support rungs (full schedule, other networks) are not kill tests
     try:
         spec = json.loads(spec_p.read_text())
     except json.JSONDecodeError as e:
         spec, fails = {}, [f"spec is not JSON: {e}"]
     else:
         fails = check_spec(spec, claim, repo, cap)
-        dup = duplicate_of(spec, rdir)
+        args = json.loads((rdir / "bundles" / f"args-spec-{qid}.json").read_text()) if (rdir / "bundles" / f"args-spec-{qid}.json").exists() else {}
+        mode = str(args.get("mode") or ("support" if args.get("rung") else "mechanism"))
+        src = str(spec.get("source") or "")
+        mp = json.loads((rdir / "mechanism-map.json").read_text()) if (rdir / "mechanism-map.json").exists() else {}
+        if mode == "baseline":
+            if src != "baseline":
+                fails.append(f"source must be \"baseline\" on a baseline chain, got {src!r}")
+        elif mode == "support":
+            kept_src = ((args.get("kept") or {}).get("spec") or {}).get("source")
+            if kept_src and src != kept_src:
+                fails.append(f"support rung must keep the kept card's source {kept_src!r}, got {src!r}")
+        else:
+            ok_ids = {s["id"] for s in mp.get("sources") or [] if s.get("status") == "open" or (s.get("status") == "tried" and int(s.get("no_improve") or 0) < 2)}
+            if mp and src not in ok_ids:
+                fails.append(f"source {src!r} is not an eligible mechanism-map source (eligible: {sorted(ok_ids)}); exhausted/dropped/unknown ids never run")
+        dup = duplicate_of(spec, rdir) if mode != "support" else None
         if dup and dup != qid:
             fails.append(f"duplicate of {dup}: the steps are the same work as an existing card (have-we-done-this check)")
     (rdir / "gates").mkdir(exist_ok=True)
@@ -574,6 +649,13 @@ def gate_monitor(qid: str, out_path: Path, rdir: Path = HERE) -> int:
     diff, sha = diff_of(wt)
     truncated = bool(out.get("diff_truncated")) or len(diff) > 200_000
     approved, reasons = check_monitor(out, diff, card["spec"].get("steps", []), truncated)
+    if re.search(r"^[-+]Subproject commit ", diff, re.M):
+        approved = False; reasons.append("the diff touches a gitlink (nested repo): code inside it is invisible to review — track the model code as files on research-trunk (owner) or do not edit it")
+    if re.search(r"^new mode 120000|^new file mode 120000|typechange", diff, re.M):
+        approved = False; reasons.append("the diff adds a symlink: what runs would live outside the reviewed tree")
+    codex_raw = str(((out.get("codex") or {}).get("raw")) or "")
+    if codex_raw and re.search(r"\b(P1|critical)\b", codex_raw, re.I) and not any(re.match(r"^(P1|critical|high)$", str(f.get("severity", "")), re.I) for f in ((out.get("codex") or {}).get("findings") or [])):
+        approved = False; reasons.append("codex raw output mentions P1/critical but the forwarded findings carry none: the forwarder dropped or down-labelled a finding")
     ee = str((_claim_block() or {}).get("eval_entry") or "").strip()
     if ee and re.search(r"^diff --git a/" + re.escape(ee) + r"\b", diff, re.M):
         approved = False; reasons.append(f"the diff modifies the shared eval entrypoint {ee} (CLAIM eval_entry): the scoring protocol is not a candidate's to change")
@@ -592,6 +674,31 @@ def retracted(rdir: Path = HERE) -> list[str]:
     p = rdir / "retracted.txt"
     return [l.strip() for l in p.read_text(encoding="utf-8").splitlines() if l.strip() and not l.startswith("#")] if p.exists() else []
 NUM = re.compile(r"(?<![\w.])[-−+]?\d+\.\d+(?![\w.])")
+SCOPE_INT = re.compile(r"(?<![\w.])(\d+)\s*(?:seeds?|networks?|epochs?|iterations?|GPU-?h(?:ours?)?|rungs?|datasets?|images?|scenes?)\b", re.I)
+
+
+def _source_tokens(rp: Path) -> set[float]:
+    """Numbers a `% src:` file may vouch for: a record's RESULT fields (mean, ci95, per_seed, clean_cost, n_realized, cost_gpu_h),
+    or the numbers of CLAIM.md's yaml block (scope: seeds, networks, thresholds). Never every number printed in the file —
+    a band ceiling or a GPU-hour figure must not 'source' a claimed gain (ARIS evidence-precheck)."""
+    txt = rp.read_text(errors="ignore")
+    if rp.name.endswith(".md") and rp.name.startswith("Q-") and rp.with_suffix(".json").exists():
+        rp = rp.with_suffix(".json"); txt = rp.read_text(errors="ignore")
+    if rp.name == "CLAIM.md":
+        m = re.search(r"^```yaml\n(.*?)\n```", txt, re.S | re.M)
+        txt = m.group(1) if m else ""
+        return {float(t) for t in re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", txt)}
+    try:
+        d = json.loads(txt)
+    except json.JSONDecodeError:
+        return {float(t) for t in re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", txt.replace("−", "-"))}
+    vals: list = []
+    for k in ("mean", "clean_cost", "n_realized"):
+        if isinstance(d.get(k), (int, float)):
+            vals.append(float(d[k]))
+    vals += [float(x) for x in (d.get("ci95") or []) if isinstance(x, (int, float))]
+    vals += [float(x) for x in (d.get("per_seed") or {}).values() if isinstance(x, (int, float))]
+    return set(vals)
 
 
 def check_numbers(tex: str, rdir: Path = HERE) -> list[str]:
@@ -600,7 +707,7 @@ def check_numbers(tex: str, rdir: Path = HERE) -> list[str]:
         body = line.split("%")[0]
         if "\\begin" in body or "\\label" in body or "\\ref" in body:
             continue
-        nums = NUM.findall(body)
+        nums = NUM.findall(body) + [m.group(1) for m in SCOPE_INT.finditer(body)]
         if not nums:
             continue
         m = re.search(r"%\s*src:\s*(\S+)", line)
@@ -613,8 +720,7 @@ def check_numbers(tex: str, rdir: Path = HERE) -> list[str]:
             rp = rp2 if rp2.exists() else rp
         if not rp.exists():
             fails.append(f"line {i}: src {src} not found"); continue
-        text = rp.read_text(errors="ignore")
-        toks = {float(t) for t in re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", text.replace("−", "-"))}
+        toks = _source_tokens(rp)
         for n in nums:
             v = n.replace("−", "-").lstrip("+")
             try:
@@ -821,6 +927,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("monitor", help="verify the monitor workflow's output against the worktree diff"); p.add_argument("qid"); p.add_argument("out")
     p = sub.add_parser("numbers", help="every number in the .tex files cites a record that contains it"); p.add_argument("tex", nargs="+")
     p = sub.add_parser("diffsha", help="sha of the worktree diff the monitor approved (intent-to-add included); the launcher compares it to the token"); p.add_argument("worktree")
+    p = sub.add_parser("cardsha", help="recompute a card's content sha (the launcher compares it to frozen_sha)"); p.add_argument("card")
+    sub.add_parser("deliverables", help="review pass + numbers on every section + fresh main.pdf → .research/DONE")
     a = ap.parse_args(argv)
     if a.cmd == "spec":
         return gate_spec(a.qid)
@@ -828,6 +936,11 @@ def main(argv=None) -> int:
         return gate_monitor(a.qid, Path(a.out))
     if a.cmd == "diffsha":
         print(diff_of(a.worktree)[1]); return 0
+    if a.cmd == "cardsha":
+        print(card_sha(json.loads(Path(a.card).read_text()))); return 0
+    if a.cmd == "deliverables":
+        fails = deliverables()
+        print("\n".join(fails) if fails else "DONE"); return 1 if fails else 0
     if a.cmd == "numbers":
         fails = []
         for t in a.tex:

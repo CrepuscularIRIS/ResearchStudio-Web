@@ -49,8 +49,9 @@ def render(run: str, card: dict, results_dir: Path, ledger: Path, rdir: Path) ->
         ci = [mean - half, mean + half]
     else:
         ci = [None, None]
-    canary_rows = [r["canary"] for r in rows]
-    canary_pass = bool(rows) and all(abs(c["observed"] - c["expected"]) <= c["tol"] for c in canary_rows)
+    spec_can = ((card.get("spec") or {}).get("canary") or {})
+    canary_rows = [{**r["canary"], **({"expected": spec_can["expected"], "tol": spec_can["tol"]} if "expected" in spec_can and "tol" in spec_can else {})} for r in rows]
+    canary_pass = bool(rows) and all(abs(c["observed"] - c["expected"]) <= c["tol"] for c in canary_rows)   # expected/tol from the frozen spec, observed from the run
     loaded = min((float(r.get("checkpoint_loaded_frac", 0)) for r in rows), default=0.0)
     direction = card["prediction"]["direction"]
     lo, hi = card["prediction"]["band"]

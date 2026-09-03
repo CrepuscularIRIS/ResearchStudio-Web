@@ -64,11 +64,14 @@ def card(r: Path, qid: str, chain: str, net: str, wt: Path, frozen=True, source=
     return c
 
 
-def record(r: Path, wt: Path, qid: str, mean: float, clean_cost, canary=True, age_h=0.0, gpu_h=2.0, n=1, ci=None, early=False):
+def record(r: Path, wt: Path, qid: str, mean: float, clean_cost, canary=True, age_h=0.0, gpu_h=2.0, n=1, ci=None, early=False, gate_pass=True):
     rec = {"run": qid, "card": qid, "metric": "gain_test", "mean": mean, "n_realized": n, "ci95": ci or [None, None], "band_hit": mean >= 1.0, "kill_hit": mean < 0.5,
-           "canary": {"pass": canary}, "cost_gpu_h": gpu_h, "artifacts": [], "early_kill": early}
+           "canary": {"pass": canary}, "cost_gpu_h": gpu_h, "artifacts": [], "early_kill": early, "gate_pass": gate_pass}
     p = r / "records" / f"{qid}.json"; p.write_text(json.dumps(rec))
     t = time.time() - age_h * 3600; os.utime(p, (t, t))
+    nbp = r / "notebook.json"; nb = json.loads(nbp.read_text()) if nbp.exists() else []
+    if not any(e.get("run") == qid and e.get("type") == "result" for e in nb):
+        nb.append({"type": "result", "run": qid}); nbp.write_text(json.dumps(nb))
     d = wt / "results" / qid; d.mkdir(parents=True, exist_ok=True)
     for k in range(n):
         seed = {"seed": k, "metric": "gain_test", "value": mean}
@@ -76,6 +79,11 @@ def record(r: Path, wt: Path, qid: str, mean: float, clean_cost, canary=True, ag
             seed["clean_cost"] = clean_cost
         (d / f"seed_{k}.json").write_text(json.dumps(seed))
     return rec
+
+
+def baseline(r: Path, wt: Path, net: str = "NetA", mean: float = 0.0, qid: str = "Q-0001-beta"):
+    """The beta chain's incumbent record on `net` (the claim compares candidates to it)."""
+    card(r, qid, "beta", net, wt, source="baseline"); return record(r, wt, qid, mean, 0.1, n=3, ci=[mean - 0.3, mean + 0.3])
 
 
 def decide(w, r, idle=(0, 1), active=NEVER):
@@ -144,29 +152,88 @@ def test_chain_actions_walk_the_ladder(tmp_path):
     record(r, wt, q, 1.4, 0.1)                                  # band hit, one seed → confirm through step.py record
     assert nxt()["state"] == "confirm" and f"step.py record {q}" in nxt()["lines"][0]
     assert nxt(active=lambda run: run == f"{q}-confirm")["state"] == "confirm_running"
+    (r / "build" / f"{q}.confirm_attempts").write_text("2\n")
+    assert nxt()["state"] == "confirm_exhausted" and "queue" in nxt()["lines"][0], "a confirm that never completes is queued, not re-rendered forever"
+    (r / "build" / f"{q}.confirm_attempts").unlink()
+    record(r, wt, q, 1.4, 0.1, n=3, ci=[0.9, 1.9])              # three seeds, CI > 0 — but no baseline record yet
+    assert nxt()["state"] == "spec_pending" and "--rung" not in nxt()["lines"][-1], "KEEP waits for the baseline chain's record on the same network"
+    baseline(r, wt, "NetA", 0.0)                                # the beta chain's incumbent → now the candidate keeps
     record(r, wt, q, 1.4, 0.1, n=3, ci=[0.9, 1.9])              # confirmed KEEP → the support ladder takes over
-    st = nxt(); assert st["state"] == "spec_pending" and "--rung R1" in st["lines"][-1] and "NetB" in st["lines"][0]
+    st = nxt(); assert st["state"] == "spec_pending" and "--rung R1" in st["lines"][-1] and "full schedule" in st["lines"][0], "the first rung is the headline run at full schedule"
     record(r, wt, q, 0.2, 0.1)                                  # killed → plain next candidate
     st = nxt(); assert st["qid"] == "Q-0002-alpha" and "--rung" not in st["lines"][-1]
     record(r, wt, q, 1.4, 0.1, early=True)                      # an early kill never confirms
     assert nxt()["state"] == "spec_pending"
+    record(r, wt, q, 1.4, 0.1, n=3, ci=[0.9, 1.9], gate_pass=False)   # the record gate refused it: not valid, never a KEEP
+    assert stage.keep_records(stage.records(r), claim) == [] and stage.best_gain(stage.records(r), claim) == (None, None)
+
+
+def test_unit_exit_codes_have_states(tmp_path):
+    w, r = ws(tmp_path); claim = stage.load_claim(w); cfg = claim["chains"]["alpha"]
+    nxt = lambda: stage.chain_next("alpha", cfg, claim, r, [0, 1], NEVER)
+    q = "Q-0001-alpha"; wt = tmp_path / f"wt-{q}"; wt.mkdir()
+    card(r, q, "alpha", "NetA", wt); (r / "gates" / f"{q}.spec.ok").write_text("t\n")
+    out = r / "bundles" / f"build-out-{q}.json"; out.write_text("{}")
+    time.sleep(0.02); (r / "monitor" / f"{q}.json").write_text(json.dumps({"approved": True, "diff_sha": "d"}))
+    (r / "tokens" / f"{q}.clean").write_text("abc\nd\n")
+    assert nxt()["state"] == "launch"
+    led = r / "ledger.jsonl"
+    led.write_text(json.dumps({"event": "stop", "run": q, "wall_s": 300, "exit": 3, "t": "2026-09-03T10:00:00"}) + "\n")
+    st = nxt(); assert st["state"] == "unit_failed" and f"build {q} --fix" in st["lines"][0], "canary failure → one fix round with the log tail, never a blind relaunch"
+    (r / "build" / f"{q}.fixes").write_text("1\n")
+    assert nxt()["state"] == "unit_failed_twice" and "queue" in nxt()["lines"][0]
+    (r / "build" / f"{q}.fixes").unlink()
+    led.write_text(json.dumps({"event": "stop", "run": q, "wall_s": 300, "exit": 5, "t": "2026-09-03T10:00:00"}) + "\n")
+    assert nxt()["state"] == "stall_relaunch"
+    (r / "build" / f"{q}.relaunched").write_text("1\n")
+    assert nxt()["state"] == "stall_twice" and "queue" in nxt()["lines"][0]
+    led.write_text(json.dumps({"event": "stop", "run": q, "wall_s": 300, "exit": 0, "t": "2026-09-03T10:00:00"}) + "\n")
+    assert nxt()["state"] == "launch", "exit 0 with no seeds = never ran to a record; launch is allowed"
+    time.sleep(0.02); out.write_text("{}")
+    assert nxt()["state"] == "build_out", "a newer build output (the fix round) outranks the stale token"
+
+
+def test_queued_id_without_card_does_not_freeze_the_chain(tmp_path):
+    w, r = ws(tmp_path); claim = stage.load_claim(w); cfg = claim["chains"]["alpha"]
+    (r / "queue.json").write_text(json.dumps([{"qid": "Q-0001-alpha", "text": "spec failed the gate twice"}]))
+    st = stage.chain_next("alpha", cfg, claim, r, [0, 1], NEVER)
+    assert st["state"] == "spec_pending" and st["qid"] == "Q-0002-alpha"
 
 
 def test_support_ladder_and_stage_D(tmp_path):
     w, r = ws(tmp_path)
     claim = stage.load_claim(w); wt = tmp_path / "wt"
     assert stage.support_rungs(claim, r)["kept"] is None
-    card(r, "Q-0001-alpha", "alpha", "NetA", wt); record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9])
+    card(r, "Q-0001-alpha", "alpha", "NetA", wt); record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9]); baseline(r, wt, "NetA", 0.0)
     lad = stage.support_rungs(claim, r)
-    assert lad["kept"] == "Q-0001-alpha" and [x["kind"] for x in lad["rungs"]] == ["network", "ablation"] and lad["rungs"][0]["value"] == "NetB"
+    assert lad["kept"] == "Q-0001-alpha" and [x["kind"] for x in lad["rungs"]] == ["schedule", "network", "ablation"] and lad["rungs"][1]["value"] == "NetB"
     assert decide(w, r)["stage"] == "C"
-    card(r, "Q-0002-alpha", "alpha", "NetB", wt, phase="support", rung="R1")
-    assert stage.support_rungs(claim, r)["rungs"][0]["status"] == "active"
-    record(r, wt, "Q-0002-alpha", 1.1, 0.1, n=3, ci=[0.5, 1.7])
-    card(r, "Q-0003-alpha", "alpha", "NetA", wt, phase="support", rung="R2"); record(r, wt, "Q-0003-alpha", 0.9, 0.1)
+    card(r, "Q-0002-alpha", "alpha", "NetA", wt, phase="support", rung="R1"); record(r, wt, "Q-0002-alpha", 1.3, 0.1, n=3, ci=[0.8, 1.8])   # full schedule: the headline
+    card(r, "Q-0003-alpha", "alpha", "NetB", wt, phase="support", rung="R2")
+    assert stage.support_rungs(claim, r)["rungs"][1]["status"] == "active"
+    record(r, wt, "Q-0003-alpha", 1.1, 0.1, n=1)
+    assert stage.support_rungs(claim, r)["rungs"][1]["status"] == "active", "a single-seed band hit on a rung is a pending confirm, not done"
+    record(r, wt, "Q-0003-alpha", 1.1, 0.1, n=3, ci=[0.5, 1.7])
+    card(r, "Q-0004-alpha", "alpha", "NetA", wt, phase="support", rung="R3"); record(r, wt, "Q-0004-alpha", 0.9, 0.1)
     d = decide(w, r)
-    assert d["stage"] == "D" and "gate.py numbers" in " ".join(d["next"])
-    assert stage.search_gpu_h(stage.records(r)) == 2.0, "support runs never count against the search budget"
+    assert d["stage"] == "D" and "write --finish" in " ".join(d["next"]), "no review yet: write, then save the verdict"
+    (r / "gates" / "write-review.json").write_text(json.dumps({"verdict": "block", "issues": ["06_experiments.tex:12 — number without src"]}))
+    d = decide(w, r); assert d["stage"] == "D" and d["next"][0].startswith("human:") and "BLOCKED" in d["reason"], "a blocked review is consumed, not printed past"
+    (r / "gates" / "write-review.json").write_text(json.dumps({"verdict": "pass", "issues": []}))
+    d = decide(w, r); assert d["stage"] == "D" and "gate.py deliverables" in d["next"][0]
+    (r / "DONE").write_text("deliverables gate passed\n")
+    assert decide(w, r)["stage"] == "DONE"
+    assert stage.search_gpu_h(stage.records(r), claim) == 2.0, "support and baseline runs never count against the search budget"
+
+
+def test_ladder_complete_but_networks_short_is_a_pivot(tmp_path):
+    w, r = ws(tmp_path); wt = tmp_path / "wt"
+    card(r, "Q-0001-alpha", "alpha", "NetA", wt); record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9]); baseline(r, wt, "NetA", 0.0)
+    card(r, "Q-0002-alpha", "alpha", "NetA", wt, phase="support", rung="R1"); record(r, wt, "Q-0002-alpha", 1.3, 0.1, n=3, ci=[0.8, 1.8])
+    card(r, "Q-0003-alpha", "alpha", "NetB", wt, phase="support", rung="R2"); record(r, wt, "Q-0003-alpha", 0.3, 0.1, n=3, ci=[-0.2, 0.8])   # NetB fails
+    card(r, "Q-0004-alpha", "alpha", "NetA", wt, phase="support", rung="R3"); record(r, wt, "Q-0004-alpha", 0.9, 0.1)
+    d = decide(w, r)
+    assert d["stage"] == "P" and "1/2 networks" in d["reason"], "keep_networks 2 with one network in band is not a paper (ARIS: the loop may drive, not acquit)"
 
 
 def test_keep_rules(tmp_path):
@@ -176,7 +243,10 @@ def test_keep_rules(tmp_path):
     record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=1); assert stage.keep_records(stage.records(r), claim) == []
     record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[-0.1, 2.9]); assert stage.keep_records(stage.records(r), claim) == []
     record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9], early=True); assert stage.keep_records(stage.records(r), claim) == []
-    record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9]); assert len(stage.keep_records(stage.records(r), claim)) == 1
+    record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9]); assert stage.keep_records(stage.records(r), claim) == [], "no baseline record yet: the claim compares to the incumbent"
+    baseline(r, wt, "NetA", 0.6); assert stage.keep_records(stage.records(r), claim) == [], "1.4 - 0.6 < keep_gain 1.0"
+    baseline(r, wt, "NetA", 0.2, qid="Q-0002-beta"); assert len(stage.keep_records(stage.records(r), claim)) == 1, "newest baseline record counts"
+    assert stage.keep_records(stage.records(r), claim)[0]["_chain"] == "alpha", "a baseline-chain record is never itself the KEEP"
 
 
 def test_stop_rules(tmp_path):
@@ -205,9 +275,11 @@ def test_spec_bundle_modes_and_card(tmp_path, monkeypatch):
     w, r = ws(tmp_path); bundle = _bundle(w, r, monkeypatch)
     sp = bundle.cmd_spec("alpha")
     assert sp["qid"] == "Q-0001-alpha" and bundle.NO_HISTORY in sp["prompt"] and "$RESULTS_DIR" in sp["prompt"]
-    assert '"mechanism_map"' in sp["prompt"] and "contamination-aware aggregation" in sp["prompt"] and "status=open" in sp["prompt"]
+    assert '"source"' in sp["prompt"] and "contamination-aware aggregation" in sp["prompt"] and '"other_eligible"' in sp["prompt"] and "method_prose" in sp["prompt"]
+    assert sp["prompt"].count("recipe_steps") >= 1 and '"board"' not in sp["prompt"], "one full recipe, heads for the rest, no board (Gene: one control object)"
+    assert "## AVOID" in sp["prompt"] and '"avoid"' not in sp["prompt"].split("## bundle")[1], "AVOID is its own section, not a bundle field"
     sb = bundle.cmd_spec("beta")
-    assert '"mode": "baseline"' in sb["prompt"] and '"mechanism_map"' not in sb["prompt"], "the baseline chain never sees the map"
+    assert '"mode": "baseline"' in sb["prompt"] and '"other_eligible"' not in sb["prompt"], "the baseline chain never sees the map"
     spec_p = r / "bundles" / "spec-Q-0001-alpha.json"
     spec_p.write_text(json.dumps({"source": "S1", "method": "m", "steps": [{"id": "s1", "file": "a.py", "change": "x" * 40}] * 3, "files": ["a.py"], "conditions": ["clean"],
                                   "held_out": "structured", "schedule": {"gpu_h": 2.0}, "network": "NetA", "kill_cmd": "python train.py --out $RESULTS_DIR --seed $SEED",
@@ -250,21 +322,12 @@ def test_mechanism_finish_verifies_and_drops(tmp_path, monkeypatch):
         {"mechanism": "M1", "domain": "moe", "name": "routing", "isomorphism": "i", "disanalogy": "d",
          "recipe": {"paper": "p", "title": "t", "steps": [], "key_number": {"value": "", "quote": "", "line": 0}, "text_path": "", "avoid": ""}, "precedent": {"found": False}},
         {"mechanism": "M1", "domain": "fusion", "name": "reliability weighting", "isomorphism": "i", "disanalogy": "d",
-         "recipe": {"paper": "p", "title": "t", "steps": ["a"], "key_number": {"value": "0.93", "quote": "wrong", "line": 1}, "text_path": str(paper), "avoid": ""}, "precedent": {"found": True, "paper": "q", "quote": "applied to RGB-D"}},
+         "recipe": {"paper": "p", "title": "t", "steps": ["a"], "key_number": {"value": "0.93", "quote": "wrong", "line": 1}, "text_path": str(paper), "avoid": ""}, "precedent": {"found": True, "paper": "q", "quote": "we apply reliability weighting to RGB-D semantic segmentation under sensor failure"}},
     ]}))
     res = bundle.cmd_mechanism_finish(str(out))
     assert res["open"] == 1 and len(res["dropped"]) == 2
     mp = json.loads((r / "mechanism-map.json").read_text())
     assert mp["sources"][0]["status"] == "open" and "no procedure" in mp["sources"][1]["drop_reason"] and "precedent" in mp["sources"][2]["drop_reason"]
-
-
-def test_ladder_complete_but_networks_short_is_a_pivot(tmp_path):
-    w, r = ws(tmp_path); wt = tmp_path / "wt"
-    card(r, "Q-0001-alpha", "alpha", "NetA", wt); record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9])
-    card(r, "Q-0002-alpha", "alpha", "NetB", wt, phase="support", rung="R1"); record(r, wt, "Q-0002-alpha", 0.3, 0.1, n=3, ci=[-0.2, 0.8])   # NetB fails
-    card(r, "Q-0003-alpha", "alpha", "NetA", wt, phase="support", rung="R2"); record(r, wt, "Q-0003-alpha", 0.9, 0.1)
-    d = decide(w, r)
-    assert d["stage"] == "P" and "1/2 networks" in d["reason"], "keep_networks 2 with one network in band is not a paper (ARIS: the loop may drive, not acquit)"
 
 
 def test_mechanism_finish_drops_ungrounded_failure_modes(tmp_path, monkeypatch):
@@ -288,8 +351,53 @@ def test_mechanism_finish_drops_ungrounded_failure_modes(tmp_path, monkeypatch):
 def test_accept_refuses_keep_gain_below_mde(tmp_path, monkeypatch):
     w, r = ws(tmp_path)
     monkeypatch.setattr(stage, "W", w); monkeypatch.setattr(stage, "HERE", r)
-    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564"))
     monkeypatch.setattr(sys, "argv", ["stage.py", "accept"])
+    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564"))
+    assert stage.main() == 1, "no a_terms: the precedent search cannot fire → refused"
+    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564\n  a_terms: [rgb-d segmentation, depth corruption]"))
     assert stage.main() == 1, "keep_gain 1.0 < MDE 1.71 at 3 seeds must be refused"
-    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564\n  seeds_for_keep: 5").replace("  seeds_for_keep: 3\n", ""))
+    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564\n  a_terms: [rgb-d segmentation, depth corruption]\n  seeds_for_keep: 5").replace("  seeds_for_keep: 3\n", ""))
     assert stage.main() == 0, "five seeds bring the MDE to 1.0"
+    ev = [json.loads(l) for l in (r / "ledger.jsonl").read_text().splitlines()]
+    assert ev[-1]["event"] == "accept" and ev[-1]["keep_gain"] == 1.0, "acceptance is a ledger event (who, what bar, when)"
+    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 0.9\n  seed_sd: 0.564\n  a_terms: [rgb-d segmentation, depth corruption]\n  seeds_for_keep: 5").replace("  seeds_for_keep: 3\n", ""))
+    assert stage.main() == 1, "tighten, never loosen: a lower keep_gain than the accepted one is refused"
+
+
+def test_infra_stop_and_dry_run_stop(tmp_path):
+    w, r = ws(tmp_path); wt = tmp_path / "wt"
+    t = "2026-09-03T10:0%d:00"
+    (r / "queue.json").write_text(json.dumps([{"qid": f"Q-000{i}-alpha", "chain": "alpha", "text": "spec workflow returned nothing (infrastructure)", "t": t % i} for i in range(1, 4)]))
+    d = decide(w, r); assert d["stage"] == "STOP" and "infrastructure" in d["reason"] and (r / "INFRA-STOP").exists()
+    (r / "queue.json").unlink(); (r / "INFRA-STOP").unlink()
+    card(r, "Q-0001-alpha", "alpha", "NetA", wt); record(r, wt, "Q-0001-alpha", 0.8, 0.1, age_h=6)          # the best, six hours ago
+    for i in range(2, 6):
+        card(r, f"Q-000{i}-alpha", "alpha", "NetA", wt); record(r, wt, f"Q-000{i}-alpha", 0.6, 0.1, age_h=6 - i)
+    d = decide(w, r); assert d["stage"] == "P" and "stop_dry_runs" in d["reason"], "four completed candidates without a new best stop the search (a count, not a clock)"
+
+
+def test_mechanism_finish_null_and_merge(tmp_path, monkeypatch):
+    w, r = ws(tmp_path); bundle = _bundle(w, r, monkeypatch)
+    out = r / "bundles" / "mechanism-out.json"
+    out.write_text(json.dumps({"failure_modes": [], "mechanisms": [], "sources": [], "error": "scientist returned nothing"}))
+    import pytest
+    with pytest.raises(SystemExit):
+        bundle.cmd_mechanism_finish(str(out))
+    assert json.loads((r / "mechanism-map.json").read_text())["sources"][0]["id"] == "S1", "a null run never overwrites the map"
+    (r / "anomalies.md").write_text("- wrong depth hurts more than missing: 6.24 vs 5.65\n")
+    paper = r / "p.txt"; paper.write_text("x\nthe estimator reaches 0.93 AUROC\n")
+    mp = json.loads((r / "mechanism-map.json").read_text()); mp["sources"][0]["tried"] = ["Q-0001-alpha"]; mp["sources"][0]["status"] = "tried"; mp["sources"][0]["no_improve"] = 1
+    (r / "mechanism-map.json").write_text(json.dumps(mp))
+    src = lambda m, dom, name, q="robust estimator contamination": {"mechanism": m, "domain": dom, "name": name, "isomorphism": "i", "disanalogy": "d", "query": q, "pattern": "reframe",
+        "recipe": {"paper": "p", "title": "t", "steps": ["a", "b"], "key_number": {"value": "0.93", "quote": "reaches 0.93 AUROC", "line": 2}, "text_path": str(paper), "avoid": "x"}, "precedent": {"found": False}}
+    out.write_text(json.dumps({"failure_modes": [{"id": "B1", "text": "t", "grounded_in": ["6.24 vs 5.65"]}],
+                               "mechanisms": [{"id": "M1", "from": "B1", "levels": ["a", "b", "estimate weight under contamination"], "text": "t"},
+                                              {"id": "M2", "from": "B1", "levels": ["a", "b", "fuse depth and rgb reliably"], "text": "t"}],
+                               "sources": [src("M1", "robust statistics", "contamination-aware aggregation"), src("M1", "control", "gain scheduling"),
+                                           src("M2", "x", "y"), src("M1", "z", "w", q="depth completion for rgb-d segmentation")]}))
+    res = bundle.cmd_mechanism_finish(str(out))
+    mp = json.loads((r / "mechanism-map.json").read_text())
+    s1 = next(s for s in mp["sources"] if s["name"] == "contamination-aware aggregation")
+    assert s1["id"] == "S1" and s1["tried"] == ["Q-0001-alpha"] and s1["no_improve"] == 1, "a re-run merges by (domain, name): ids and the hill-climb memory survive"
+    assert mp["mechanisms"][1]["status"] == "dropped" and "domain-free" in mp["mechanisms"][1]["drop_reason"], "an M that still says depth/rgb is not abstracted"
+    assert any("not cross-domain" in (d["why"] or "") for d in res["dropped"]), "a query with the domain's words is a keyword search, not a source"

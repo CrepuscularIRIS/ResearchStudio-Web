@@ -18,9 +18,12 @@ if [ "${SMOKE_FIRST:-1}" = "1" ]; then
     SMOKE=1 SEED=0 RESULTS_DIR="$MAIN_DIR/smoke" bash -c "$*"; RC=$?
     if [ "$RC" -eq 0 ]; then
         python3 - "$MAIN_DIR/smoke/seed_0.json" <<'EOF' || RC=3
-import json, sys
+import json, os, sys
 try:
-    d = json.load(open(sys.argv[1])); c = d["canary"]
+    d = json.load(open(sys.argv[1])); c = dict(d["canary"])
+    # the bar comes from the FROZEN spec (exported by run_protected.sh), never from the run under test (paperjury: no agent echoes its own criterion)
+    if os.environ.get("CANARY_EXPECTED") not in (None, "", "-"):
+        c["expected"] = float(os.environ["CANARY_EXPECTED"]); c["tol"] = float(os.environ["CANARY_TOL"])
     ok = abs(float(c["observed"]) - float(c["expected"])) <= float(c["tol"])
     print(f"[smoke] canary expected {c['expected']} observed {c['observed']} tol {c['tol']} -> {'PASS' if ok else 'FAIL'}")
     sys.exit(0 if ok else 1)
@@ -40,7 +43,7 @@ watchdog() {   # $1 = pid of the training command, $2 = seed
         now=$(date +%s)
         if [ -f "$MAIN_DIR/progress.json" ]; then
             mtime=$(stat -c %Y "$MAIN_DIR/progress.json" 2>/dev/null || echo 0)
-            [ "$mtime" != "$last_mtime" ] && { last_mtime=$mtime; last_t0=$now; }
+            [ "$mtime" != "$last_mtime" ] && { last_mtime=$mtime; last_t0=$now; cat "$MAIN_DIR/progress.json" >> "$MAIN_DIR/progress.jsonl" 2>/dev/null; echo >> "$MAIN_DIR/progress.jsonl"; }
             verdict=$(python3 - "$MAIN_DIR/progress.json" "$EARLY_AT" "$EARLY_MIN" <<'EOF'
 import json, math, sys
 try:
@@ -79,12 +82,12 @@ if [ "$RC" -eq 0 ]; then
         wait "$CMD_PID"; CRC=$?
         if [ "$WRC" -eq 4 ]; then
             python3 - "$MAIN_DIR" "$s" <<'EOF'
-import json, sys, pathlib
+import json, os, sys, pathlib
 d = pathlib.Path(sys.argv[1]); s = int(sys.argv[2])
 p = json.load(open(d / "progress.json")) if (d / "progress.json").exists() else {}
 smoke = d / "smoke" / "seed_0.json"
 can = json.load(open(smoke)).get("canary") if smoke.exists() else {"expected": 0, "observed": 0, "tol": 0}
-seed = {"seed": s, "metric": p.get("metric", "dev_gain"), "value": float(p.get("dev_gain") or 0.0), "clean_cost": float(p.get("clean_dev_cost") or 0.0),
+seed = {"seed": s, "metric": os.environ.get("CARD_METRIC") or p.get("metric", "dev_gain"), "value": float(p.get("dev_gain") or 0.0), "clean_cost": float(p.get("clean_dev_cost") or 0.0),
         "canary": can, "checkpoint_loaded_frac": float(p.get("checkpoint_loaded_frac") or 1.0), "artifacts": [str(d / "progress.json")],
         "early_kill": True, "fraction": p.get("fraction")}
 (d / f"seed_{s}.json").write_text(json.dumps(seed, indent=1))

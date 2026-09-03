@@ -34,7 +34,7 @@ FORMULATION_KEYS = ["question", "hypothesis", "minimal_experiment", "kills", "co
 PROVENANCE_KEYS = ["stated", "inferred", "abduced", "speculated"]
 MIN_FORMULATIONS = 3
 MIN_BODY_CHARS = 1500
-NUM = re.compile(r"\d+\.\d+")
+NUM = re.compile(r"\d+(?:\.\d+)?")
 
 
 def norm(s) -> str:
