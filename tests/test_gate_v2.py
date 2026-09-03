@@ -135,6 +135,50 @@ def test_numbers_gate(tmp_path):
     tex = "Gain is 1.42 mIoU. % src: .research/records/Q-0001-alpha.json\n"
     assert gate.check_numbers(tex, rdir) == []
     assert any("without `% src" in f for f in gate.check_numbers("Gain is 1.42 mIoU.\n", rdir))
-    assert any("not in" in f for f in gate.check_numbers("Gain is 9.99 mIoU. % src: .research/records/Q-0001-alpha.json\n", rdir))
+    assert any("not a number token" in f for f in gate.check_numbers("Gain is 9.99 mIoU. % src: .research/records/Q-0001-alpha.json\n", rdir))
     assert any("retracted" in f for f in gate.check_numbers("a sixfold gap % src: .research/records/Q-0001-alpha.json\n", rdir))
     assert gate.check_numbers("\\label{tab:1.2}\n", rdir) == []
+
+
+def test_record_gate_refuses_high_blockers(tmp_path):
+    wt = tmp_path / "wt"; res = wt / "results" / "Q-0001-alpha"; res.mkdir(parents=True)
+    rdir = tmp_path / ".research"; rdir.mkdir()
+    card = {"id": "Q-0001-alpha", "chain": "alpha", "worktree": str(wt), "prediction": {"metric": "gain_test"}}
+    rec = {"run": "Q-0001-alpha", "metric": "gain_test"}
+    now = datetime.now().astimezone()
+    (rdir / "ledger.jsonl").write_text(json.dumps({"event": "stop", "run": "Q-0001-alpha", "wall_s": 60, "exit": 0, "t": now.isoformat()}) + "\n")
+    (res / "seed_0.json").write_text(json.dumps({"seed": 0, "value": 1.0, "clean_cost": 0.1}))
+    (res / "progress.json").write_text(json.dumps({"fraction": 1.0, "dev_gain": 1.2}))
+    (res / "blockers.json").write_text(json.dumps([{"severity": "medium", "text": "slow dataloader"}]))
+    assert gate.record_provenance(rec, card, rdir) == []
+    (res / "blockers.json").write_text(json.dumps([{"severity": "high", "text": "injection layer never entered the optimizer"}]))
+    f = gate.record_provenance(rec, card, rdir)
+    assert any("high blocker" in x and "ARFT rule 9" in x for x in f), "a run that names its own critical flaw is not a result"
+
+
+def test_diff_of_sees_new_files(tmp_path):
+    r = tmp_path / "repo"; r.mkdir()
+    def git(*a): subprocess.run(["git", "-C", str(r), *a], check=True, capture_output=True)
+    git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+    (r / "a.py").write_text("x = 1\n"); git("add", "a.py"); git("commit", "-qm", "init"); git("branch", "research-trunk")
+    (r / "new_module.py").write_text("def f():\n    return 42\n")
+    plain = subprocess.run(["git", "-C", str(r), "diff", "research-trunk"], capture_output=True, text=True).stdout
+    assert "new_module" not in plain, "plain git diff never shows an untracked file (the AAR hole)"
+    diff, sha = gate.diff_of(str(r))
+    assert "new_module.py" in diff and "return 42" in diff and len(sha) == 64
+    assert gate.diff_of(str(r))[1] == sha, "stable across calls"
+    (r / "new_module.py").write_text("def f():\n    return 43\n")
+    assert gate.diff_of(str(r))[1] != sha, "editing the new file after approval changes the sha the launcher checks"
+
+
+def test_spec_gate_eval_entry(tmp_path):
+    rp = repo(tmp_path)
+    claim = {**CLAIM, "eval_entry": "tools/score.py"}
+    spec = good_spec() if "good_spec" in globals() else None
+    if spec is None:
+        return
+    spec["kill_cmd"] = "python train.py --out $RESULTS_DIR --seed $SEED"
+    f = gate.check_spec(spec, claim, rp, 4)
+    assert any("shared eval entrypoint" in x for x in f)
+    spec["kill_cmd"] += " && python tools/score.py $RESULTS_DIR"
+    assert not any("shared eval entrypoint" in x for x in gate.check_spec(spec, claim, rp, 4))

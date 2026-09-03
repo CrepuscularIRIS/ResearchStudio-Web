@@ -379,6 +379,14 @@ def record_provenance(rec: dict, card: dict, rdir: Path = HERE) -> list[str]:
             fails.append(f"{sp.name}: clean_cost missing")
     if seeds and not run.endswith("-smoke") and not (rdir_results / "blockers.json").exists():
         fails.append("blockers.json missing: an empty list is a claim, a missing file is not")
+    elif (rdir_results / "blockers.json").exists():
+        try:
+            bl = json.loads((rdir_results / "blockers.json").read_text())
+        except json.JSONDecodeError:
+            bl = []; fails.append("blockers.json: not JSON")
+        for b in [x for x in bl if isinstance(x, dict) and str(x.get("severity", "")).lower() in ("high", "critical")][:3]:
+            fails.append(f"high blocker written by the run itself: {str(b.get('text', ''))[:120]} — a named flaw is not a fixed one "
+                         f"(ARFT rule 9): one fix round, or the owner lowers it in blockers.json by hand and says why in the spec")
     if seeds and not run.endswith("-confirm") and not (rdir_results / "progress.json").exists():
         fails.append("progress.json missing: the command never reported a checkpoint (the watchdog contract)")
     idx = sorted(int(re.sub(r"\D", "", sp.stem) or 0) for sp in seeds)
@@ -440,6 +448,11 @@ def check_spec(spec: dict, claim: dict, repo: Path, cap_gpu_h: float) -> list[st
     for tok in ("$RESULTS_DIR", "$SEED"):
         if tok not in cmd:
             fails.append(f"kill_cmd must honour {tok} (the launcher sets it)")
+    ee = str(claim.get("eval_entry") or "").strip()
+    if ee and ee not in cmd:
+        fails.append(f"kill_cmd must score through the shared eval entrypoint {ee!r} (CLAIM eval_entry: every chain, one protocol — ARIS normalisation fraud)")
+    if ee and any(str(st.get("file", "")).strip() == ee for st in steps if isinstance(st, dict)):
+        fails.append(f"steps may not modify the shared eval entrypoint {ee!r}")
     can = spec.get("canary") or {}
     if not isinstance(can.get("expected"), (int, float)) or not isinstance(can.get("tol"), (int, float)) or float(can.get("tol", 0)) <= 0:
         fails.append("canary.expected and canary.tol must be numbers, tol > 0")
@@ -545,14 +558,25 @@ def check_monitor(out: dict, diff: str, steps: list[dict], truncated: bool) -> t
     return (len(reasons) == 0), reasons
 
 
+def diff_of(worktree: str) -> tuple[str, str]:
+    """THE diff the monitor, the token and the launcher all hash. `git add -N` (intent-to-add) first, so a NEW file the
+    builder created is in it — plain `git diff` never shows untracked files (AAR: the approved code must be the launched code).
+    .gitignore still applies (results/, logs/ stay out)."""
+    subprocess.run(["git", "-C", worktree, "add", "-N", "-A"], capture_output=True)
+    diff = subprocess.run(["git", "-C", worktree, "diff", "research-trunk"], capture_output=True, text=True).stdout
+    return diff, hashlib.sha256(diff.encode()).hexdigest()
+
+
 def gate_monitor(qid: str, out_path: Path, rdir: Path = HERE) -> int:
     card = json.loads((rdir / "cards" / f"{qid}.json").read_text())
     out = json.loads(Path(out_path).read_text())
     wt = card["worktree"]
-    diff = subprocess.run(["git", "-C", wt, "diff", "research-trunk"], capture_output=True, text=True).stdout
-    sha = hashlib.sha256(diff.encode()).hexdigest()
+    diff, sha = diff_of(wt)
     truncated = bool(out.get("diff_truncated")) or len(diff) > 200_000
     approved, reasons = check_monitor(out, diff, card["spec"].get("steps", []), truncated)
+    ee = str((_claim_block() or {}).get("eval_entry") or "").strip()
+    if ee and re.search(r"^diff --git a/" + re.escape(ee) + r"\b", diff, re.M):
+        approved = False; reasons.append(f"the diff modifies the shared eval entrypoint {ee} (CLAIM eval_entry): the scoring protocol is not a candidate's to change")
     (rdir / "monitor").mkdir(exist_ok=True)
     (rdir / "monitor" / f"{qid}.json").write_text(json.dumps({"qid": qid, "approved": approved, "diff_sha": sha, "reasons": reasons,
                                                               "findings": (out.get("grok") or out).get("findings", []), "codex": out.get("codex"),
@@ -590,10 +614,16 @@ def check_numbers(tex: str, rdir: Path = HERE) -> list[str]:
         if not rp.exists():
             fails.append(f"line {i}: src {src} not found"); continue
         text = rp.read_text(errors="ignore")
+        toks = {float(t) for t in re.findall(r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])", text.replace("−", "-"))}
         for n in nums:
             v = n.replace("−", "-").lstrip("+")
-            if v not in text and v.lstrip("-") not in text:
-                fails.append(f"line {i}: {n} not in {src}")
+            try:
+                fv = float(v)
+            except ValueError:
+                fails.append(f"line {i}: {n} is not a number"); continue
+            # numeric-token equality (ARIS evidence-precheck): 73.2 matches 73.20 and never a digit-substring of 173.25
+            if not any(abs(fv - t) < 1e-9 or abs(abs(fv) - t) < 1e-9 for t in toks):
+                fails.append(f"line {i}: {n} is not a number token in {src}")
     for bad in retracted(rdir):
         if bad in tex:
             fails.append(f"retracted literal {bad!r} appears (paper/.claude/CLAUDE.md forbids it)")
@@ -790,11 +820,14 @@ def main(argv=None) -> int:
     p = sub.add_parser("spec", help="B1 completeness gate on bundles/spec-<qid>.json"); p.add_argument("qid")
     p = sub.add_parser("monitor", help="verify the monitor workflow's output against the worktree diff"); p.add_argument("qid"); p.add_argument("out")
     p = sub.add_parser("numbers", help="every number in the .tex files cites a record that contains it"); p.add_argument("tex", nargs="+")
+    p = sub.add_parser("diffsha", help="sha of the worktree diff the monitor approved (intent-to-add included); the launcher compares it to the token"); p.add_argument("worktree")
     a = ap.parse_args(argv)
     if a.cmd == "spec":
         return gate_spec(a.qid)
     if a.cmd == "monitor":
         return gate_monitor(a.qid, Path(a.out))
+    if a.cmd == "diffsha":
+        print(diff_of(a.worktree)[1]); return 0
     if a.cmd == "numbers":
         fails = []
         for t in a.tex:

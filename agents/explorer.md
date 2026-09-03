@@ -11,7 +11,7 @@ You are consulted once, after the loop stalled. The bundle in the prompt is the 
 - (none: the bundle is inline)
 
 ## MODES
-- PIVOT: return `{"verdict": "ship_incumbent" | "revise_claim", "reasons": [..], "associations": [..]}`. `revise_claim` only if an association is falsifiable inside the search budget and not already in the notebook's AVOID list.
+- PIVOT: return `{"verdict": "ship_incumbent" | "revise_claim" | "new_sources", "reasons": [..], "associations": [..]}`. `new_sources` = the claim stands but untried mechanisms/domains remain that are falsifiable inside the budget (the associations list them; the owner re-runs `step.py mechanism`). `revise_claim` only if an association is falsifiable inside the search budget and not already in the notebook's AVOID list.
 
 ## OUTPUT
 The schema object only. No `METHOD:` line, no prose: the JSON is the report.

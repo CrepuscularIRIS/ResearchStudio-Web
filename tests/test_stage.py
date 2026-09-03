@@ -256,3 +256,40 @@ def test_mechanism_finish_verifies_and_drops(tmp_path, monkeypatch):
     assert res["open"] == 1 and len(res["dropped"]) == 2
     mp = json.loads((r / "mechanism-map.json").read_text())
     assert mp["sources"][0]["status"] == "open" and "no procedure" in mp["sources"][1]["drop_reason"] and "precedent" in mp["sources"][2]["drop_reason"]
+
+
+def test_ladder_complete_but_networks_short_is_a_pivot(tmp_path):
+    w, r = ws(tmp_path); wt = tmp_path / "wt"
+    card(r, "Q-0001-alpha", "alpha", "NetA", wt); record(r, wt, "Q-0001-alpha", 1.4, 0.1, n=3, ci=[0.9, 1.9])
+    card(r, "Q-0002-alpha", "alpha", "NetB", wt, phase="support", rung="R1"); record(r, wt, "Q-0002-alpha", 0.3, 0.1, n=3, ci=[-0.2, 0.8])   # NetB fails
+    card(r, "Q-0003-alpha", "alpha", "NetA", wt, phase="support", rung="R2"); record(r, wt, "Q-0003-alpha", 0.9, 0.1)
+    d = decide(w, r)
+    assert d["stage"] == "P" and "1/2 networks" in d["reason"], "keep_networks 2 with one network in band is not a paper (ARIS: the loop may drive, not acquit)"
+
+
+def test_mechanism_finish_drops_ungrounded_failure_modes(tmp_path, monkeypatch):
+    w, r = ws(tmp_path); bundle = _bundle(w, r, monkeypatch)
+    (r / "anomalies.md").write_text("## measured\n- plausible wrong depth hurts more than missing depth: 6.24 vs 5.65 mIoU on NetA\n")
+    paper = r / "p.txt"; paper.write_text("line one\nthe estimator reaches 0.93 AUROC on contaminated data\n")
+    out = r / "bundles" / "mechanism-out.json"
+    src = lambda m: {"mechanism": m, "domain": f"d-{m}", "name": f"n-{m}", "isomorphism": "i", "disanalogy": "d", "naive_in_A": "zero fill",
+                     "recipe": {"paper": "p", "title": "t", "steps": ["a", "b"], "key_number": {"value": "0.93", "quote": "reaches 0.93 AUROC", "line": 2}, "text_path": str(paper), "avoid": "x"},
+                     "precedent": {"found": False}}
+    out.write_text(json.dumps({"failure_modes": [{"id": "B1", "text": "wrong depth hurts more than missing", "grounded_in": ["6.24 vs 5.65"]},
+                                                 {"id": "B2", "text": "attention collapses under fog", "grounded_in": ["everyone knows this"]}],
+                               "mechanisms": [{"id": "M1", "from": "B1"}, {"id": "M2", "from": "B2"}], "sources": [src("M1"), src("M2")]}))
+    res = bundle.cmd_mechanism_finish(str(out))
+    mp = json.loads((r / "mechanism-map.json").read_text())
+    assert res["open"] == 1 and "ungrounded" in res["dropped"][0]["why"]
+    assert mp["failure_modes"][1].get("status") == "dropped" and mp["mechanisms"][1].get("status") == "dropped"
+    assert mp["sources"][0]["naive_in_A"] == "zero fill", "K3's naive_in_A reaches the map (ResearchStudio T5)"
+
+
+def test_accept_refuses_keep_gain_below_mde(tmp_path, monkeypatch):
+    w, r = ws(tmp_path)
+    monkeypatch.setattr(stage, "W", w); monkeypatch.setattr(stage, "HERE", r)
+    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564"))
+    monkeypatch.setattr(sys, "argv", ["stage.py", "accept"])
+    assert stage.main() == 1, "keep_gain 1.0 < MDE 1.71 at 3 seeds must be refused"
+    (w / "CLAIM.md").write_text(CLAIM.replace("keep_gain: 1.0", "keep_gain: 1.0\n  seed_sd: 0.564\n  seeds_for_keep: 5").replace("  seeds_for_keep: 3\n", ""))
+    assert stage.main() == 0, "five seeds bring the MDE to 1.0"

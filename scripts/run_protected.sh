@@ -36,6 +36,8 @@ EOF
 )
 case "$RUN" in *-confirm) SMOKE_FIRST=0 ;; *) SMOKE_FIRST=1 ;; esac
 { [ -f "$TOKEN" ] && grep -q "$SHA" "$TOKEN"; } || { echo "REFUSED: no review token naming sha $SHA at $TOKEN" >&2; exit 1; }
+DSHA=$(python3 "$R/gate.py" diffsha "$WT" 2>/dev/null || echo "-")
+{ [ "$DSHA" != "-" ] && grep -q "$DSHA" "$TOKEN"; } || { echo "REFUSED: worktree diff sha $DSHA is not the one the monitor approved (token $TOKEN); code changed after review — re-run the monitor" >&2; exit 1; }
 [ -f "$W/.claude/hooks/session-lock.py" ] && { python3 "$W/.claude/hooks/session-lock.py" --check "$$" || exit 1; }
 if systemctl --user is-active --quiet "$UNIT.service"; then
     echo "REFUSED: $UNIT.service is already active — never relaunch a running unit" >&2; exit 1

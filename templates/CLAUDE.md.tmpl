@@ -6,10 +6,10 @@ One claim (`CLAIM.md`), one loop (`WORKFLOW.md`). Main never reasons about the s
 | Stage | Trigger | Main runs | Who |
 |---|---|---|---|
 | A frame | no `CLAIM.md` | `bundle.py A` → `frame.workflow.js` | scientist (Fable) |
-| R review | claim not accepted / edited; or the mechanism map has no open source | **owner**: `stage.py accept`; read `.research/mechanism-map.json` | human |
+| R review | claim not accepted / edited; or the mechanism map has no open source | **owner**: `stage.py accept` (refuses a `keep_gain` below the Lehr MDE when `seed_sd` is set); read `.research/mechanism-map.json` | human |
 | M mechanism | accepted, no `mechanism-map.json` for this claim text | `step.py mechanism` → `mechanism.workflow.js` → `step.py mechanism --finish <out>` | Fable (B, M) · K3 (C) · Grok (recipe, precedent) |
 | C loop | map has open sources, no KEEP-complete ladder, no stop | per chain, one of: `step.py propose <chain> [--rung R]` → Workflow(spec) → `step.py propose --finish <Q>` → `step.py build <Q>` → Workflow(build) → `step.py build --finish <Q> <out>` → wait → `step.py record <Q>` | Fable · GLM · Grok · Codex |
-| P pivot | no improvement 24 h / 24 search GPU-h / every map source exhausted | `bundle.py pivot` → `pivot.workflow.js` → **owner** picks an exit | explorer (K3) |
+| P pivot | no improvement 24 h / 24 search GPU-h / every map source exhausted; or the ladder is complete but fewer than `keep_networks` networks reach the band | `bundle.py pivot` → `pivot.workflow.js` → **owner** picks an exit | explorer (K3) |
 | D write | one KEEP (3 seeds, CI95 > 0) and the support ladder done (other networks, ablation), one rung at a time | `bundle.py write` → `write.workflow.js` → `gate.py numbers` → latexmk | writer (GLM), Fable, Grok |
 | STOP | `.research/IDENTITY-MISMATCH` exists | fix the model pin, re-probe, delete the marker | human |
 
@@ -21,9 +21,9 @@ Workflows do semantic fan-out only and receive everything inline in `args` (a JS
 ## Rules
 1. `CLAIM.md` is edited by the owner only; `stage.py accept` records its sha; `gate.py card` refuses while the sha differs; the write-guard hook denies any lane that touches loop state.
 2. Ideas come from the mechanism map (A → failure mode B grounded in `.research/anomalies.md` → abstract mechanism M → source domain C with a recipe and a disanalogy), never from a lane's free text. A source with no procedure or with a precedent in A is dropped by script.
-3. The kill test is the whole build; one candidate per chain at a time. Token only after `gate.py monitor` approved the current diff (quotes verified against the real diff; Grok fail-closed, Codex skipped when unavailable).
+3. The kill test is the whole build; one candidate per chain at a time. Token only after `gate.py monitor` approved the current diff (intent-to-add first, so new files are in it; quotes verified against the real diff; Grok fail-closed, Codex skipped when unavailable). The token names the card sha AND the diff sha; the launcher recomputes the diff sha and refuses if the worktree changed after review.
 4. Cut losses by script: the unit runs a SMOKE phase first (canary), then the watchdog kills a run whose dev_gain is below the early-stop line at 25% / 50% of the schedule (exit 4 = a recorded early kill) or that stalls (exit 5 = infrastructure). Same source twice without a new best → source exhausted; next candidate must change source.
-5. Only a record refutes: `render_record.py` + `gate.py record` (unit exit 0 or 4, seed mtimes inside a launcher window, `blockers.json` and `progress.json` present, `clean_cost`, metric = claim metric). Never edit `records/`, `ledger.jsonl`, `notebook.json`, `mechanism-map.json` by hand.
+5. Only a record refutes: `render_record.py` + `gate.py record` (unit exit 0 or 4, seed mtimes inside a launcher window, `blockers.json` and `progress.json` present, no `high` blocker — a run that names its own critical flaw is a fix round, not a result — `clean_cost`, metric = claim metric). Never edit `records/`, `ledger.jsonl`, `notebook.json`, `mechanism-map.json` by hand.
 6. No GPU work outside `GPU=<n> [SEEDS=…] bin/run_protected.sh <run> <card> <mem>G <cmd>`; `step.py` is the only caller.
 7. A workflow that returns nothing is an infrastructure failure, not a verdict: `bundle.py queue <Q> "<what>"`, move on. One fix round per gate, then queue. Never re-run a workflow by hand with a changed prompt.
 8. Generalisation only after one model keeps: the support ladder (other networks, datasets, ablation) runs one rung at a time as ordinary candidates with `phase: support`; support runs never count against the search budget.
@@ -42,6 +42,6 @@ Workflows do semantic fan-out only and receive everything inline in `args` (a JS
 - Pin the model of every lane in `.claude/agents/*.md`; the identity probe stops the loop on a silent substitution (`.research/IDENTITY-MISMATCH`).
 - Hooks (plugin): session lock, launch gate, dispatch guard, write guard, identity probe. `Workflow(<name>)` for the six workflows is allowed by `init`.
 - Builder result contract (in every build bundle): `$RESULTS_DIR/seed_$SEED.json`, `$RESULTS_DIR/blockers.json`, and `$RESULTS_DIR/progress.json` rewritten at every eval checkpoint (`fraction`, `dev_gain`, `clean_dev_cost`, `loss`).
-- Optional CLAIM fields the scripts read: `a_terms`, `early_stop: {at, min_gain, stall_min}`, `support_ladder: [{kind, value}]`, `held_out_terms`, chain `mode: baseline`.
+- Optional CLAIM fields the scripts read: `a_terms`, `early_stop: {at, min_gain, stall_min}`, `support_ladder: [{kind, value}]`, `held_out_terms`, `a_terms`, `seed_sd` (accept checks `keep_gain` ≥ 2.8·sd·√(2/n)), `eval_entry` (every `kill_cmd` must call it; no spec step or diff may touch it), chain `mode: baseline`. The claim sentence names no method: candidates come from the mechanism map, the chain's `seed_method` is only the incumbent baseline.
 - Codex is found by glob under `~/.claude/plugins/cache/openai-codex/`; without it the Codex lens is skipped, never a verdict.
 - Bash cwd persists between tool calls; use absolute paths.

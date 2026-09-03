@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import stage  # noqa: E402
+import gapmap  # noqa: E402
 
 HERE = stage.HERE
 W = stage.W
@@ -132,6 +133,8 @@ def _chain_history(chain: str, n: int = 3) -> list[dict]:
         why = "in progress"
         if rec:
             why = "kill" if rec.get("kill_hit") else ("band hit" if rec.get("band_hit") else "below band")
+            if rec.get("early_kill"):
+                why = f"early kill by the watchdog at fraction {rec.get('fraction')} (provisional: the schedule never finished; not a completed kill test)"
             if not (rec.get("canary") or {}).get("pass"):
                 why = "canary failed (invalid)"
         elif mon and not mon.get("approved"):
@@ -192,8 +195,8 @@ def cmd_A() -> dict:
     bundle = {"manuscripts": _goal_field("manuscripts", ["paper/merged/main.tex"]),
               "paper_rules": _goal_field("manuscript_rules", "paper/.claude/CLAUDE.md"), "frozen_block": stage_frozen(), "records": recs, "local_library": lib,
               "template": template.read_text(encoding="utf-8") if template.exists() else "(no template; follow WORKFLOW.md)"}
-    task = ("读 bundle 里列出的稿件（你可以 Read 这些路径）和 records，写出 `CLAIM.md`：一条 claim、insight、证据表、规则、种子方法，"
-            "文件顶部必须有 ```yaml claim: 块（照 template）。claim 是一句可证伪的话——在条件 Z 下 f(X;Z) 具有性质 P——不是“我要做什么模型”（Sparking 第一层）。写完只返回 {\"written\": \"CLAIM.md\"}。")
+    task = ("读 bundle 里列出的稿件（你可以 Read 这些路径）和 records，写出 `CLAIM.md`：一条 claim、insight、证据表、规则、对照方法（incumbent：论文需要的现成基线，不是候选），"
+            "文件顶部必须有 ```yaml claim: 块（照 template）。claim 是一句可证伪的话——在条件 Z 下 f(X;Z) 具有性质 P——不是“我要做什么模型”（Sparking 第一层）；claim 句和 metric 里不得出现任何方法名（候选方法由 mechanism 阶段从机制图产生，不在这里决定）。写完只返回 {\"written\": \"CLAIM.md\"}。")
     _assert_size("A", bundle)
     return {"prompt": _prompt(task, bundle, {"written": "CLAIM.md"}, tools_note="只读 bundle 列出的路径；不搜索；写完返回 JSON。")}
 
@@ -215,15 +218,41 @@ def cmd_M() -> dict:
             "search": SEARCH, "max_sources_per_mechanism": 3, "out": str(HERE / "bundles" / "mechanism-out.json")}
 
 
+def _grounded(g: str, ground_txt: str) -> bool:
+    """A grounded_in entry counts when its normalised text (>= 12 chars) is a substring of anomalies.md + CLAIM.md, or when
+    every number it quotes appears there (a measurement can be cited by its value)."""
+    n = gapmap.norm(g)
+    if len(n) >= 12 and n in ground_txt:
+        return True
+    nums = re.findall(r"\d+(?:\.\d+)?", g)
+    return bool(nums) and all(x in ground_txt for x in nums)
+
+
 def cmd_mechanism_finish(out_path: str) -> dict:
-    sys.path.insert(0, str(HERE)); import gapmap  # noqa: E402
     out = json.loads(Path(out_path).read_text())
+    ground_txt = gapmap.norm(((HERE / "anomalies.md").read_text(encoding="utf-8") if (HERE / "anomalies.md").exists() else "")
+                             + " " + ((W / "CLAIM.md").read_text(encoding="utf-8") if (W / "CLAIM.md").exists() else ""))
+    fms, bad_b = [], set()
+    for fm in out.get("failure_modes") or []:
+        hits = [g for g in (fm.get("grounded_in") or []) if _grounded(str(g), ground_txt)]
+        if hits:
+            fms.append({**fm, "grounded_in": hits})
+        else:
+            bad_b.add(str(fm.get("id"))); fms.append({**fm, "status": "dropped", "drop_reason": "no grounded_in entry is found in anomalies.md / CLAIM.md (a failure mode is a measurement, not an opinion)"})
+    mechs, bad_m = [], set()
+    for m in out.get("mechanisms") or []:
+        if str(m.get("from")) in bad_b:
+            bad_m.add(str(m.get("id"))); mechs.append({**m, "status": "dropped", "drop_reason": f"its failure mode {m.get('from')} is ungrounded"})
+        else:
+            mechs.append(m)
     sources, dropped = [], []
     for i, s in enumerate(out.get("sources") or [], 1):
         sid = f"S{i}"
         rec = s.get("recipe") or {}
         kn = rec.get("key_number") or {}
         fails = []
+        if str(s.get("mechanism")) in bad_m:
+            fails.append(f"mechanism {s.get('mechanism')} rests on an ungrounded failure mode")
         if not rec.get("steps"):
             fails.append("no procedure steps (a name is not a recipe)")
         if not str(s.get("disanalogy", "")).strip():
@@ -238,12 +267,13 @@ def cmd_mechanism_finish(out_path: str) -> dict:
         if prec.get("found"):
             fails.append(f"precedent: {prec.get('paper')} already applies this mechanism to A — {str(prec.get('quote', ''))[:120]}")
         entry = {"id": sid, "mechanism": s.get("mechanism"), "domain": s.get("domain"), "name": s.get("name"), "isomorphism": s.get("isomorphism"),
-                 "disanalogy": s.get("disanalogy"), "recipe": {k: rec.get(k) for k in ("paper", "title", "steps", "key_number", "text_path", "avoid")},
+                 "disanalogy": s.get("disanalogy"), "naive_in_A": s.get("naive_in_A"),
+                 "recipe": {k: rec.get(k) for k in ("paper", "title", "steps", "key_number", "text_path", "avoid")},
                  "precedent": prec, "status": "dropped" if fails else "open", "drop_reason": "; ".join(fails) if fails else None,
                  "best": None, "no_improve": 0, "tried": []}
         (dropped if fails else sources).append(entry)
     mp = {"made_at": time.strftime("%Y-%m-%dT%H:%M:%S"), "claim_sha": stage.claim_sha(W),
-          "failure_modes": out.get("failure_modes") or [], "mechanisms": out.get("mechanisms") or [], "sources": sources + dropped,
+          "failure_modes": fms, "mechanisms": mechs, "sources": sources + dropped,
           "infra": out.get("stats")}
     (HERE / "mechanism-map.json").write_text(json.dumps(mp, indent=1, ensure_ascii=False))
     return {"open": len(sources), "dropped": [{"id": d["id"], "why": d["drop_reason"]} for d in dropped]}
@@ -251,14 +281,23 @@ def cmd_mechanism_finish(out_path: str) -> dict:
 
 # ── C1 spec ─────────────────────────────────────────────────────────────────
 
-def _map_view() -> list[dict]:
-    """The compact view of the mechanism map a spec bundle carries (status decides what may be picked)."""
+def _eligible(s: dict) -> bool:
+    """A source the next spec may use: open, or tried and its last version refreshed the best (no_improve == 0)."""
+    return s.get("status") == "open" or (s.get("status") == "tried" and int(s.get("no_improve") or 0) == 0)
+
+
+def _map_view(eligible_only: bool = False) -> list[dict]:
+    """The compact view of the mechanism map a bundle carries. With eligible_only the recipe travels ONLY for sources the
+    spec may pick; the rest keep id/status/name so dedup and 'never pick exhausted' still work (Gene: one control object per
+    context — several complete recipes side by side blur the signal)."""
     view = []
     for s in _map().get("sources") or []:
-        view.append({"id": s["id"], "status": s.get("status"), "mechanism": s.get("mechanism"), "domain": s.get("domain"), "name": s.get("name"),
-                     "isomorphism": s.get("isomorphism"), "disanalogy": s.get("disanalogy"), "recipe_steps": (s.get("recipe") or {}).get("steps"),
-                     "recipe_avoid": (s.get("recipe") or {}).get("avoid"), "best": s.get("best"), "no_improve": s.get("no_improve"), "tried": s.get("tried"),
-                     "drop_reason": s.get("drop_reason")})
+        head = {"id": s["id"], "status": s.get("status"), "mechanism": s.get("mechanism"), "domain": s.get("domain"), "name": s.get("name"),
+                "best": s.get("best"), "no_improve": s.get("no_improve"), "tried": s.get("tried"), "drop_reason": s.get("drop_reason")}
+        if eligible_only and not _eligible(s):
+            view.append(head); continue
+        view.append({**head, "isomorphism": s.get("isomorphism"), "disanalogy": s.get("disanalogy"), "naive_in_A": s.get("naive_in_A"),
+                     "recipe_steps": (s.get("recipe") or {}).get("steps"), "recipe_avoid": (s.get("recipe") or {}).get("avoid")})
     return view
 
 
@@ -279,7 +318,7 @@ def cmd_spec(chain: str, retry: bool = False, rung: str | None = None) -> dict:
         parent = {"id": p["id"], "spec": p.get("spec"), "record": {k: stage._json(HERE / "records" / f"{p['id']}.json").get(k) for k in ("mean", "band_hit", "kill_hit", "n_realized")},
                   "monitor": stage._json(HERE / "monitor" / f"{p['id']}.json").get("reasons"), "blockers": stage._json_list(stage.results_dir(p, p["id"]) / "blockers.json")}
     bundle = {"qid": qid, "chain": chain, "gpu": cfg.get("gpu"), "iteration": n, "mode": "baseline" if baseline else "mechanism",
-              "seed_method": cfg.get("seed_method"), "parent": parent,
+              "seed_method": cfg.get("seed_method") if baseline else None, "incumbent": cfg.get("seed_method") if not baseline else None, "parent": parent,
               "claim": _claim_core(), "board": stage.board(W, HERE), "chain_history": _chain_history(chain) or [NO_HISTORY],
               "numbers": {"kill_threshold": stage.kill_threshold(recs, c), "keep_gain": c.get("keep_gain"), "clean_cost_max": c.get("clean_cost_max"),
                           "gpu_h_cap": c.get("kill_gpu_h_cap", 4), "held_out": c.get("held_out"), "networks": c.get("networks")},
@@ -298,12 +337,14 @@ def cmd_spec(chain: str, retry: bool = False, rung: str | None = None) -> dict:
     elif baseline:
         task = (f"链 {chain} 是对照链：把 seed_method 作为论文需要的基线原样实现成 B1 规格（`source` 填 \"baseline\"），之后的迭代只修复 parent 的 blockers / monitor 理由，不改方法。")
     else:
-        bundle["mechanism_map"] = _map_view()
-        task = (f"链 {chain} 走机制图。规则：只能选 status=open 的 source，或者当 parent 的 source 上一版刷新了最好成绩（no_improve=0）时在同一 source 上改一版；"
+        bundle["mechanism_map"] = _map_view(eligible_only=True)
+        task = (f"链 {chain} 走机制图。incumbent 只是论文里现成的对照方法，不是你的候选：候选只能来自 mechanism_map。规则：只能选 status=open 的 source，或者当 parent 的 source 上一版刷新了最好成绩（no_improve=0）时在同一 source 上改一版；"
                 f"status=exhausted/dropped 的 source 永远不选。把选中 source 的配方（recipe_steps）按 disanalogy 适配到 A，写成 B1 规格：每一步指向 files 里一个具体文件并写清改什么，"
                 f"held-out 类别不进训练，kill test 在 gpu_h_cap 之内，`source` 填该 source 的 id。"
                 f"先诊断再迭代：parent 的 record / blockers / monitor 理由说明上一版为什么没成，改的必须是那个原因。"
-                f"与 chain_history、tried、AVOID 里任何一条步骤相同的规格不算候选（脚本会按步骤指纹拒收）。rationale_line 与 naive_baseline 各一句。")
+                f"与 chain_history、tried、AVOID 里任何一条步骤相同的规格不算候选（脚本会按步骤指纹拒收）。"
+                f"AVOID 是已被证伪的机制，不是建议：新规格必须绕开每一条，除非 rationale_line 说明为什么这次不同。"
+                f"naive_baseline 从该 source 的 naive_in_A 出发写（机制在 A 里最朴素的版本），规格必须说明为何能胜过它；rationale_line 一句。")
     task += f" 把规格 JSON 写到 {spec_path}，再返回它。"
     if retry:
         bundle["previous_spec"] = stage._json(spec_path)
@@ -369,7 +410,7 @@ def cmd_build(qid: str, fix: bool = False) -> dict:
                                  "不得读取或改动 test half / protected paths；held_out 条件不得出现在训练条件里",
                                  "不得写死或缓存结果数字；必须按 result_contract 写 seed 文件与 blockers.json",
                                  "ARIS 四禁：伪 ground truth（用模型输出当参考）、分数归一化作弊、幻影结果（引用从未写出的文件/从未调用的函数）、范围虚报 —— 归到 hardcode / contract"]}
-    mon_task = (f"你是执行前的完整性监视器，fail-closed。先运行 `git -C {wt} diff research-trunk` 拿到 diff（只读这一样东西，不读其它文件）。"
+    mon_task = (f"你是执行前的完整性监视器，fail-closed。先运行 `git -C {wt} add -N -A && git -C {wt} diff research-trunk` 拿到 diff（intent-to-add 让新建文件也进 diff；只读这一样东西，不读其它文件）。"
                 "对每个 step 给出 coverage 条目：status ∈ implemented|missing|changed，并引用实现它的 diff 行（原文、整行、逐行，不改写）。"
                 "对每条违规给出 finding：kind ∈ leak|protected|hardcode|held_out_in_training|contract|extra_mechanism，同样引用 diff 行。"
                 "返回 {\"approved\": bool, \"coverage\": [{\"step_id\": \"\", \"status\": \"\", \"diff_lines\": []}], \"findings\": [{\"kind\": \"\", \"diff_lines\": [], \"text\": \"\"}]}。")
@@ -398,8 +439,8 @@ def _unit_log_tail(qid: str, n: int = 60) -> str:
 
 
 def diff_of(worktree: str) -> tuple[str, str]:
-    diff = subprocess.run(["git", "-C", worktree, "diff", "research-trunk"], capture_output=True, text=True).stdout
-    return diff, hashlib.sha256(diff.encode()).hexdigest()
+    import gate  # noqa: E402  (one definition: intent-to-add + diff research-trunk; new files included)
+    return gate.diff_of(worktree)
 
 
 def cmd_token(qid: str) -> dict:
@@ -414,7 +455,7 @@ def cmd_token(qid: str) -> dict:
         raise SystemExit(f"{qid}: worktree diff changed since the monitor approved it; re-run the monitor")
     (HERE / "tokens").mkdir(exist_ok=True)
     p = HERE / "tokens" / f"{qid}.clean"
-    p.write_text(card["frozen_sha"] + "\n")
+    p.write_text(card["frozen_sha"] + "\n" + sha + "\n")     # card sha + diff sha: the launcher checks both
     return {"token": str(p)}
 
 
@@ -493,8 +534,9 @@ def cmd_write() -> dict:
     polish = _prompt("对 files 里的节做一次 register 抛光：不动 claim，不加数字，不动 `% src:` 注释。返回 {\"written\": \"...\"}。",
                      {"files": sections, "manuscript_rules": rules_txt},
                      {"written": ""}, tools_note="可以 Read/Write 这两个文件；不搜索。")
-    review = _prompt("终审：逐个数字对照其 `% src:` record 文件；任何数字与 record 不符、任何缺 src 的数字、任何 manuscript_rules 禁写项 → block。返回 {\"verdict\": \"pass|block\", \"issues\": [\"file:line — why\"]}。",
-                     {"files": sections, "records_dir": str(HERE / "records"), "manuscript_rules": rules_txt},
+    review = _prompt("终审：逐个数字对照其 `% src:` record 文件；任何数字与 record 不符、任何缺 src 的数字、任何 manuscript_rules 禁写项 → block。"
+                     "选择性叙事（ARFT E.2）也 block：board 里每个被 kill / 没刷新最好成绩的候选都必须在负结果讨论里出现；只报成功的稿子不通过。每个 claim 句必须能指到一条证据（issues 里列出没有证据的句子）；CLAIM.md 文献核对表里标为“必须讨论”的对照没出现在 related work 也 block。返回 {\"verdict\": \"pass|block\", \"issues\": [\"file:line — why\"]}。",
+                     {"files": sections, "records_dir": str(HERE / "records"), "manuscript_rules": rules_txt, "board": stage.board(W, HERE)},
                      {"verdict": "pass|block", "issues": []}, tools_note="可以 Read 这两个文件与 records/；不改任何文件；不搜索。")
     return {"sections": secs, "polish_prompt": polish, "review_prompt": review}
 

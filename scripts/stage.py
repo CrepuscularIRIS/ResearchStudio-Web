@@ -16,7 +16,7 @@ Files (under .research/; Q = card id like Q-0001-alpha):
   <worktree>/results/<run>/  run ∈ {Q, Q-confirm}; progress.json is the watchdog's and Main's window into a running unit
 """
 from __future__ import annotations
-import argparse, hashlib, json, re, subprocess, sys, time
+import argparse, math, hashlib, json, re, subprocess, sys, time
 from datetime import datetime
 from pathlib import Path
 
@@ -116,6 +116,11 @@ def valid(rec: dict, claim: dict) -> bool:
         return False
     cc = rec.get("_clean_cost")
     return cc is not None and cc <= float(claim.get("clean_cost_max", 0.2))
+
+
+def networks_hit(recs: list[dict], claim: dict) -> set[str]:
+    """Networks with at least one valid, band-hitting, completed (not early-killed) record, search or support phase."""
+    return {str(x.get("_network")) for x in recs if valid(x, claim) and x.get("band_hit") and not x.get("early_kill") and x.get("_network")}
 
 
 def keep_records(recs: list[dict], claim: dict) -> list[dict]:
@@ -314,8 +319,16 @@ def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: l
                 "next": ["human: read .research/mechanism-map.json"]}
     recs = records(r)
     ladder = support_rungs(claim, r)
-    if ladder["kept"] and all(x["status"] in ("done", "queued") for x in ladder["rungs"]):
-        return {"stage": "D", "reason": f"KEEP {ladder['kept']} and the support ladder is complete ({len(ladder['rungs'])} rungs)",
+    ladder_complete = ladder["kept"] and all(x["status"] in ("done", "queued") for x in ladder["rungs"])
+    need_nets = int(claim.get("keep_networks", 1) or 1)
+    nets_hit = networks_hit(recs, claim)
+    if ladder_complete and len(nets_hit) < need_nets:
+        return {"stage": "P", "reason": f"support ladder complete but only {len(nets_hit)}/{need_nets} networks reach the band ({sorted(nets_hit)}): the claim as written is not supported",
+                "next": ["python3 .research/bundle.py pivot > .research/bundles/args-pivot.json",
+                         "Workflow(name='pivot', args=<contents of args-pivot.json>)   # explorer (K3) once",
+                         "human: exit (a) ship the incumbent with the negative generalisation result, (b) edit CLAIM.md (keep_networks / networks) and re-accept"]}
+    if ladder_complete:
+        return {"stage": "D", "reason": f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)",
                 "next": ["python3 .research/bundle.py write > .research/bundles/args-write.json",
                          "Workflow(name='write', args=<contents of args-write.json>)   # writer (GLM) per section, polish (Fable), review (Grok)",
                          "python3 .research/gate.py numbers paper/merged/sections/05_method.tex paper/merged/sections/06_experiments.tex",
@@ -365,7 +378,18 @@ def main() -> int:
     sub.add_parser("json")
     a = ap.parse_args()
     if a.cmd == "accept":
-        (HERE / "CLAIM.sha").write_text(claim_sha() + "\n"); print("accepted", claim_sha()[:12]); return 0
+        c = load_claim(W) or {}
+        sd, n, kg = c.get("seed_sd"), int(c.get("seeds_for_keep", 3) or 3), float(c.get("keep_gain", 0) or 0)
+        if sd is None:
+            print("WARNING: CLAIM has no seed_sd — the keep bar is not checked against the minimum detectable effect (Lehr); add seed_sd from the baseline's seed spread")
+        else:
+            mde = 2.8 * float(sd) * math.sqrt(2.0 / n)
+            if kg < mde:
+                print(f"REFUSED: keep_gain {kg} is below the MDE {mde:.2f} for seed_sd {sd} at {n} seeds (80% power): raise keep_gain, or raise seeds_for_keep "
+                      f"({math.ceil(2 * (2.8 * float(sd) / kg) ** 2) if kg > 0 else '?'} seeds would do) — a bar below the MDE cannot fail (see feedback: prereg thresholds must bind)")
+                return 1
+            print(f"keep_gain {kg} clears the MDE {mde:.2f} (seed_sd {sd}, {n} seeds)")
+        (HERE / "CLAIM.sha").write_text(claim_sha(W) + "\n"); print("accepted", claim_sha(W)[:12]); return 0
     if a.cmd == "board":
         print(board()); return 0
     if a.cmd == "map":

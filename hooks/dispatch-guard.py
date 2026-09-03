@@ -144,6 +144,8 @@ def main() -> None:
         sys.exit(0)                                  # cannot see the dispatch: fail open, never block blind
     prompt = first_prompt(transcript)
     lane = lane_of(prompt, data.get("agent_type"))
+    if lane not in BUDGET:
+        sys.exit(0)                                  # not one of the loop's lanes (review/general agents): never guarded
     why = decide(data.get("tool_name", ""), data.get("tool_input") or {}, prompt,
                  count_calls(transcript), lane, named_paths(prompt))
     if why:
