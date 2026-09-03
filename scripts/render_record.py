@@ -8,10 +8,10 @@ Builder contract: results/<run>/seed_<k>.json =
 Optional results/<run>/blockers.json = [{"severity": "high|medium", "text": "..."}]
 """
 from __future__ import annotations
-import argparse, hashlib, json, math, os, re, statistics, sys, time
+import argparse, hashlib, json, math, re, statistics, sys, time
 from pathlib import Path
 
-HERE = Path(os.environ.get("RESEARCH_DIR") or Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd()) / ".research")
+HERE = Path(__file__).resolve().parent
 T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262}
 
 
@@ -73,6 +73,7 @@ def render(run: str, card: dict, results_dir: Path, ledger: Path, rdir: Path) ->
                    "observed": [c["observed"] for c in canary_rows], "pass": canary_pass},
         "checkpoint_loaded_frac": loaded, "band_hit": band_hit, "kill_hit": kill_hit,
         "cost_gpu_h": cost_from_ledger(ledger, run), "artifacts": artifacts, "blockers": blockers,
+        "early_kill": any(bool(r.get("early_kill")) for r in rows), "fraction": min((float(r.get("fraction") or 1.0) for r in rows), default=None),
         "rendered_by": f"render_record.py@{sha256(Path(__file__))[:12]}",
         "rendered_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }

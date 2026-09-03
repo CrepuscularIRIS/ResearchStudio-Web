@@ -1,7 +1,13 @@
 {
   "name": "research-harness",
-  "owner": {"name": "CrepuscularIRIS"},
+  "owner": {
+    "name": "CrepuscularIRIS"
+  },
   "plugins": [
-    {"name": "research-harness", "source": ".", "description": "Five-lane autonomous research loop with blind adjudication and script gates."}
+    {
+      "name": "research-harness",
+      "source": ".",
+      "description": "Claim loop: mechanism map \u2192 one candidate at a time \u2192 script gates \u2192 early stop \u2192 support ladder."
+    }
   ]
 }

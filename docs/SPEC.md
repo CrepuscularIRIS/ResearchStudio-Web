@@ -1,279 +1,112 @@
-# Research workflow v6 — design spec (five models, dispatcher main, trimmed skills)
+# WORKFLOW.md v3 — 一条 claim 的无人值守闭环（机制图 + 刷分 + 及时止损，2026-09-03）
 
-**Date:** 2026-09-02 · **Status:** draft v4 for user review · **Replaces:** the CCF-sprint workflow backed up at `.claude.backup0902` and drafts v1–v3.
+目标不变：`CLAIM.md` 里那一条 claim，一篇论文。人出现四次：accept、机制图无开放来源时、停止规则后二选一、D 阶段读稿。
+形状是 paperjury / Claude native 的：workflow 只做语义 fan-out（输入内联、schema 输出），确定性动作在 `step.py` 里跑在两次 workflow 之间，`stage.py` 只读文件、每链打印恰好一条动作。复审证据：`docs/WORKFLOW-REVIEW-2026-09-03.md`。
 
-## 1. Purpose
-
-One persistent GLM 5.3 session in Claude Code dispatches the loop from a single goal file: research → card → oracle → build and run → verdict → iterate. Main organises and passes data; it does not reason about the science. Five models each do one job. Every capability is an existing skill in `.claude/skills/`, read by the agent that uses it before it starts. The custom layer is two scripts, three hooks, five agent files, five brief templates, one CLAUDE.md.
-
-Research stance: a paper is a bridge between knowledge in domain A and domain B that nobody has connected. Phase R is built to find those bridges, not to deepen one domain.
-
-Target: benchmark improvement and a publishable method on the objective in `GOAL.md`, at CCF-A level.
-
-## 2. What the evidence says the harness must do
-
-| Finding | Source | Mechanism |
-|---|---|---|
-| R1 Grounding, 31% of failures: report and run directory disagree; the comparison is never performed | AutoResearchEval §5.2 | records rendered from result files by a script; claims checked against records (§5, §7.1) |
-| R2 Depth, 27.6%: agent finds a fatal flaw and ships anyway (82.5%); frame-lock in one hypothesis space is a model limit, fixable only by a second hypothesis in the trajectory | AutoResearchEval §5.2 | structured `blockers` the gate refuses to pass; Explorer on a second model family generates bridges (§4, §6) |
-| R3 Integrity, 33.5%: metric substitution, circular validation, concealed negatives; needs verification the agent does not control | AutoResearchEval §5.2 | kill criterion fixed before the run; blind Codex verdict; held-out merge guard; every run in the ledger (§7.2, §5.1) |
-| R4 Engineering only 7.9% | AutoResearchEval §5.1 | no execution framework beyond the systemd launcher |
-| GLM-5.3 in Claude Code 41.65, above K3 37.09 and Opus 4.8 37.51 | ASI-Bench §3.1 | GLM is Main and Builder |
-| Codex + GPT-5.6 xhigh: best cost-to-score reviewer | ASI-Bench §3.2 | Codex plugin is the Reviewer, invoked only in the experimental phases |
-| Old gates checked form not content; enforcement saw under 30% of compute; fable alias silently ran as Opus; agent outputs went unused | post-mortem | launcher writes the ledger and refuses unfrozen cards; single-writer lock; identity probe; every output is a file a later phase requires (§7.3, §6) |
-| Bare Claude Code beat every multi-agent scaffold; roles pay only where they create an information barrier | landscape survey | each lane justified by one barrier (§4) |
-
-## 3. Principles
-
-1. **Main dispatches; it does not reason.** Scripts, tree writes, briefs, status lines. Paths travel between agents, never content.
-2. **Five models, one job each.** Coding: GLM. Science: Fable, sparingly. Divergence and bridges: K3. Retrieval: Grok. Verdicts: Codex, experimental phases only.
-3. **Content gates are scripts; judgment gates are blind and outside the ecosystem.**
-4. **Machines write the record and the ledger.**
-5. **Every agent reads its skills first and says so.** A report without the `METHOD:` line is discarded.
-6. **Only official or high-quality third-party skills, and only the parts we use.** §14 is the triage; nothing outside it is loaded.
-
-## 4. Lanes
-
-| Lane | Model (proxy id) | Harness | Barrier | Job | Never |
-|---|---|---|---|---|---|
-| **Main** | GLM 5.3 (`glm-5.3[1m]`), persistent | Claude Code | the owner | dispatch by the phase table; run `gate.py` and the launcher; Arbor writes; select one card when the Scientist offers several | reasoning about the science; summarising reports; typing numbers; launching outside the launcher |
-| **Builder** | GLM 5.3, fresh per build | subagent | keeps Main small | implement from the card in an Arbor worktree, smoke → small → full; fix rounds continue the same instance | design; launches; state writes |
-| **Scientist** | Fable 5.1 (`claude-fable-5-1`), fresh, ≤ N per cycle | subagent | strongest reasoner, quota-limited | judge bridges at mechanism level; write cards with mechanism, forbids, oracle design; diagnose out-of-band results | state writes; implementation; retrieval |
-| **Explorer** | Kimi K3 (`k3-256k`), fresh | subagent | second family against frame-lock | 3 to 5 (A, B) bridges per cycle with keywords for both domains; advisory critique of cards; advisory findings on merge candidates | ranking cards; blocking anything; state writes |
-| **Researcher** | Grok 4.6 (`grok-4.6`), fresh, parallel | subagent | context isolation for bulk retrieval | one packet per bridge: `paper-search` over both domains, `scoop-check` on the bridge claim, `corpus.py`, arXiv and repo fetch; dedup against tree, records, lit ledger | ranking; designing; state writes |
-| **Reviewer** | GPT-5.6 via the Codex plugin | `codex-companion.mjs` through a thin subagent | out-of-ecosystem, blind | pre-launch `review` of the worktree diff; blind result verdict via read-only `task` on the packet; one `adversarial-review` before submission | Main's transcript, summaries, prior rounds; anything outside phases B, V, and pre-submission |
-
-### 4.1 Routing
-
-Campaign config dir `~/.claude-research`, cloned from `~/.claude-kimi`:
+## 0. 一页总览
 
 ```
-ANTHROPIC_BASE_URL=http://127.0.0.1:4001/
-ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3[1m]
-ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1
-ANTHROPIC_DEFAULT_SONNET_MODEL=k3-256k
-ANTHROPIC_DEFAULT_HAIKU_MODEL=grok-4.6
-CLAUDE_CODE_SUBAGENT_MODEL=inherit
-CODEX_REVIEW_GATE_GLOBAL=false      # the plugin's stop-time review gate would spend Codex on every turn
-model=opus
+A  frame      Fable 写 CLAIM.md ──► 人 accept
+M  mechanism  一个 workflow，每条 claim 一次（Sparking.md：A→B→M→C）
+              Fable：claim + anomalies.md → 失败模式 B（必须引用测量）→ 机制 M（三层抽象，最后一层无领域词）
+              K3：   每个 M → 若干来源领域 C {同构论证, 机制名, disanalogy, 检索句}
+              Grok： 每个 (M,C) → 配方基因（步骤 + 关键数字引文行）+ 先例（这个机制搬进 A 过没有）
+              --finish：脚本核对引文行；无配方 / 有先例的 C 标 dropped；写 mechanism-map.json
+C  loop       每链 5 个 Main 动作（alpha 走机制图，beta 跑 ConD 对照，各一台 GPU，一次一个候选）
+              propose  Fable 从图里挑一个 open 的 C（或当前 C 上一版刷新了最好则再改一版）→ B1 规格
+              --finish gate.py spec → 卡 → 冻结 → worktree
+              build    同一 workflow：GLM 实现 → Grok 审 diff（逐步 coverage + 引文行）∥ Codex 审 diff
+              --finish 脚本核对引文行 ∈ 真实 diff → token → launcher
+                       unit 内：SMOKE=1 先跑（canary 不过 exit 3）→ 训练；watchdog 读 progress.json，
+                       25%/50% 时 dev_gain 低于线 → 杀（exit 4，算 early kill，进 record）；停滞 45 min → exit 5
+              record   render → gate.py record → notebook → 机制图刷分：同一 C 两版不刷新最好 → exhausted
+                       band hit → 直接再跑 SEEDS=1,2；n≥3 且 CI95>0 → KEEP
+              KEEP 后  支持阶梯：其他网络 / 数据集 / 消融，一次一档，仍是普通候选（phase=support，不计搜索预算）
+P  pivot      24 h 无进步 / 24 搜索 GPU-h / 图上来源全部 exhausted → K3 一次 → 人选出口
+D  write      阶梯走完 → writer 按节 → Fable 抛光 → Grok 终审 → gate.py numbers → latexmk
 ```
 
-Agent files pin the full proxy id in `model:`. A `SubagentStop` hook reads the transcript's first `"model"` field and compares it with the agent file; on mismatch it writes `.research/IDENTITY-MISMATCH` and exits 2, and Main discards that report. Codex: the installed `codex@openai-codex` plugin 1.0.6 supplies the runtime; `codex` 0.152.1 is logged in; `~/.codex/config.toml` pins `gpt-5.6-sol`.
+模型调用：M 阶段 Fable 1 + K3 1 + Grok fan-out（每条 claim 一次）；C 每轮 Fable 1、GLM 1（+1 修复）、Grok 1、Codex 1；Main 每轮 5 个动作。
 
-Reviewer invocations, all through the plugin's script:
+## 1. 原则（每条一句）
 
-```
-node "$CODEX_PLUGIN/scripts/codex-companion.mjs" review --wait --scope working-tree           # phase B, diff
-node "$CODEX_PLUGIN/scripts/codex-companion.mjs" task --wait --effort xhigh < .research/packets/<id>.md   # phase V, read-only, no --write
-node "$CODEX_PLUGIN/scripts/codex-companion.mjs" adversarial-review --wait "<packet path>"    # once, pre-submission
-```
+1. 想法只从机制图来：A→B→M→C→S，不让任何车道自由发挥（Sparking.md；ARFT B.5 词汇相似≠结构同构，所以每个 C 必须带配方和 disanalogy）。
+2. B 必须接地在我们测过的反常（`.research/anomalies.md`），不接地的失败模式不写（ARFT D.1）。
+3. 规格必须是 B1 完整过程（ASI-Bench：只给方法名比不给更贵更差）。
+4. 一次一个候选；花钱前有人看 diff；record 只来自 launcher；band hit 补种子后才叫 KEEP。
+5. 止损由脚本执行，不由 Main 看：smoke 先跑、watchdog 中途杀、同一来源两版不进步就换来源。
+6. 一个模型上成立之后再泛化：支持阶梯一档一档跑，绝不并行铺开。
+7. null ≠ 否决；基础设施失败单列；丢弃带原因入队列。
+8. 只为事实投票（代码忠实、泄漏、记录真实），不为想法投票。
+9. 先跑一条链看完第一轮，再开第二条。
 
-### 4.2 Skills each agent reads first
+## 2. 模型与车道（4 + 1）
 
-| Lane | Required reading (absolute paths under `.claude/skills/`) | Tools |
-|---|---|---|
-| Main | CLAUDE.md; `arbor-agent-merge-eval/SKILL.md` before any merge | Bash, Read, Agent, Monitor, `mcp__arbor__*` |
-| Builder | `experiment-bridge/SKILL.md` (with `CODE_REVIEW=false`; the plugin reviews instead); `experiment-queue/SKILL.md` only for grids of ten or more jobs | Bash, Edit, Read, Write inside its worktree |
-| Scientist | `statistical-power/SKILL.md` when sizing n and MDE; `ablation-planner/SKILL.md` at card time | Read, read-only Bash |
-| Explorer | `idea-spark/references/ideation-patterns/overview.md`, `idea-spark/references/anti-patterns.md` | Read |
-| Researcher | `paper-search/SKILL.md`, `scoop-check/SKILL.md` | Bash for search scripts and git clone, Read, Write to `.research/lit/` only |
-| Reviewer | `shared-references/reviewer-independence.md`, `shared-references/acceptance-gate.md` | Bash to run the plugin script, Read of the packet |
+| 车道 | 模型 | 做什么 | 工具 |
+|---|---|---|---|
+| Main | GLM | 跑 `stage.py`，执行它打印的那一个 `step.py` 动作 | 全部 |
+| scientist | Fable 5.1 | M：B 与 M；C1：规格；A；D 抛光 | Read, Write |
+| explorer | K3 | M：来源领域发散；P：审查与联想 | Read |
+| researcher | Grok | M：配方与先例检索；C：diff 监视；D：终审 | Bash, Read, Grep, Glob |
+| reviewer | Codex（外部 CLI） | C：diff 的正确性审查（只在实验前） | Bash(node *), Read |
+| builder | GLM | C：在 worktree 实现，让 kill_cmd 满足契约 | Bash, Read, Edit, Write, Grep, Glob |
+| writer | GLM | D：按节写 | Read, Write, Edit, latexmk |
 
-Subagents carry `disallowedTools: mcp__arbor__*`. Hypotheses never enter CLAUDE.md or rules, because those load into every subagent.
+## 3. Main 看到的动作（`stage.py` 每链打印其一）
 
-### 4.3 The dispatch contract
-
-Every dispatch prompt is at most fifteen lines: lane, brief path, REQUIRED READING paths, input artifact paths, output path, status contract. Exact values live in the brief file. Every report is a file; the agent's final message is one status line, `DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED`, plus the report path. Main reads the status line and passes the path on. Main never pastes history, never summarises a report into the next brief, never rewrites an agent's artifact.
-
-## 5. State
-
-### 5.1 Arbor holds the tree
-
-`arbor mcp` registered in the campaign config; one run rooted at `ugra-rgbd-robust/` (git, trunk branch `research-trunk`). Metadata from GOAL.md: `eval_cmd` (dev), `eval_cmd_test` (held-out: real Kinect, SUN RGB-D), `metric_direction`, `baseline_score`, `test_baseline_score`, `trunk_branch`, `protected_paths` (evaluation code, dataset configs, metric implementation).
-
-| Card | Arbor node |
+| 动作 | 里面发生什么 |
 |---|---|
-| id + one-line claim + frozen sha | `hypothesis` |
-| lifecycle | `status`: pending → running → done or pruned → merged |
-| dev metric | `score` |
-| record path | `result` |
-| verdict one-liner and lesson | `insight` |
-| worktree branch | `code_ref` |
+| `step.py mechanism` → Workflow(mechanism) → `--finish` | 上表 M；写 `mechanism-map.json` |
+| `step.py propose <chain> [--rung R]` → Workflow(spec) → `propose --finish <Q>` | Fable 写规格；脚本：spec 门（步骤指向 trunk 上存在的文件、held-out 不进训练、network 白名单、kill_cmd 走 $RESULTS_DIR/$SEED、canary）→ 卡（worktree 先定）→ CLAIM.sha/FROZEN.sha 门 → 冻结 → worktree。门失败 → `--retry` 一次 → 再失败入队 |
+| `step.py build <Q> [--fix]` → Workflow(build) → `build --finish <Q> <out>` | GLM 实现 → Grok ∥ Codex；脚本：每条引文行 ∈ 真实 diff、每个 step 有 coverage=implemented、无 finding、无 Codex P1、diff 未截断 → token（绑当前 diff sha）→ launcher。拒绝 → `--fix` 一次 → 再拒入队 |
+| （等待） | `stage.py` 打印 `fraction · dev_gain · loss`；Monitor / ScheduleWakeup |
+| `step.py record <Q>` | render → record 门（exit 0/4、mtime 在 unit 窗口、blockers.json、progress.json、clean_cost、metric 一致）→ notebook → 机制图刷分 → band hit 则启动 SEEDS=1,2 → 再次 `record` 重渲染 |
+| `bundle.py queue <Q> "<why>"` | 丢弃带原因，链跳到下一候选 |
 
-Merges go only through `git_merge_branch` with `test_score` from the held-out record and `protected_paths` enforced.
+## 4. 每步 context bundle（字段 · 扣留）
 
-### 5.2 Files under `.research/`
-
-```
-briefs/<lane>-<id>.md    one per dispatch, from the lane's template; exact values live here
-bridges/<cycle>.md       Explorer output: (A, B) bridges with keywords, analogy, disanalogy, pattern
-lit/<bridge>.md          Researcher packets; LIT-LEDGER.md appended with every query verbatim
-cards/<id>.json          written by the Scientist, frozen by gate.py (sha in the node)
-records/<run>.json,.md   rendered by render_record.py from result files; never hand-edited
-packets/<id>.md          built by gate.py packet; the only thing the Reviewer sees
-verdicts/<id>.json       Reviewer JSON + gate.py Type-A output + computed state
-reports/<lane>-<id>.md   every agent report
-ledger.jsonl             appended by run_protected.sh at start and stop
-LOCK                     single-writer lock: session id + pid
-views/                   HYPOTHESES.md, RESULTS.md, DECISIONS.md, BUDGET.md rendered by gate.py views
-```
-
-Paper side keeps CCFA's contracts: `ccfa.yaml`, `manuscript/*.tex`, `ccfa-review-reports/`.
-
-### 5.3 Schemas
-
-**Bridge** (one entry in `bridges/<cycle>.md`): `domain_a`, `domain_b`, `what_b_knows_that_a_has_not_used`, `mechanism_analogy`, `disanalogy_that_could_break_it`, `pattern` (one of the 15 idea-spark patterns), `keywords_a[]`, `keywords_b[]`.
-
-**Card:**
-
-```json
-{
-  "id": "C-0007", "bridge": "bridges/2026-09-03.md#3",
-  "claim": "Training against smooth-wrong depth raises held-out wrong-depth mIoU without lowering clean mIoU",
-  "mechanism": "...", "forbids": "what must NOT be observed if the mechanism is right",
-  "prediction": {"metric": "mIoU_nyu_heldout_wrong", "band": [0.8, 2.0], "direction": "maximize"},
-  "kill": {"metric": "mIoU_nyu_heldout_wrong", "threshold": 0.3, "rule": "mean over n_required seeds below threshold"},
-  "controls": ["absent-depth arm, same schedule and aug budget", "shuffled-corruption arm"],
-  "seed_sd": 0.564, "n_required": 3, "mde": 1.71,
-  "instrument": {"checkpoint": "...", "reference_number": 54.93, "canary": "entire_missing reproduces 49.95 ± 0.10"},
-  "oracle": {"design": "feed the ground-truth corruption mask; downstream must move", "cost_gpu_h": 0.5, "pass": "delta > oracle_mde"},
-  "tier": "T4", "cost_gpu_h": 31, "frozen_sha": null, "arbor_node": null
-}
-```
-
-**Record:** `run`, `card`, `seeds`, `per_seed`, `mean`, `ci95`, `n_realized`, `canary {expected, observed, pass}`, `checkpoint_loaded_frac`, `band_hit`, `kill_hit`, `cost_gpu_h` (from ledger), `artifacts [{path, sha256}]`, `blockers []` (the Builder's own self-review, structured), `rendered_by`.
-
-**Verdict:** `type_a {pass, checks}`, `type_b {reviewer, verdict, criterion_met, blocking []}`, `state`.
-
-State rule, computed by script: `REFUTED` if `kill_hit`; `SUPPORTED` only if `type_a.pass`, `type_b.verdict == SUPPORTED`, and `blockers` and `blocking` are both empty; otherwise `CONTESTED`. Reasoning demotes; only a record refutes. Disagreement becomes `CONTESTED` plus the next cheapest discriminating test; the loop never blocks on the user.
-
-## 6. The loop
-
-| Phase | Main dispatches | Reads | Produces | Gate |
-|---|---|---|---|---|
-| **R Research** | Explorer once: 3 to 5 (A, B) bridges; then Researcher ×N in parallel, one per bridge, searching both domains | GOAL, tree constraints view, previous records | `bridges/<cycle>.md`; one `lit/` packet per bridge with dedup and scoop verdicts | every bridge has a packet |
-| **C Card** | Scientist judges the bridges at mechanism level and writes one to three cards; Main runs `gate.py card`; Explorer appends advisory critique; Main selects one and adds the node | bridges, packets, records | one frozen-ready card, node `pending` | `gate.py card` passes |
-| **O Oracle** | Builder implements the oracle probe in a worktree, T0–T3, at most 1 GPU-h; Main launches | card | oracle record | signal above oracle MDE, else `tree_prune` with reason |
-| **B Build and run** | Builder implements smoke → small → full; Reviewer `review` on the diff; Main freezes and launches; Monitor; meanwhile R and C for the next bridge | card, repo | code, review token, ledger row | `gate.py freeze`; launcher accepts |
-| **V Verdict** | `render_record.py`; `gate.py record` and `packet`; Reviewer blind `task`; Scientist diagnosis first if out of band; Explorer advisory findings if a merge is possible | record, card, paths | verdict; node done or pruned; `git_merge_branch --dry-run`, merge if the held-out margin clears; lesson into `insight` | state written; views re-rendered; back to R |
-
-Codex runs in B and V only, and once more before submission. Card critique in C is Explorer, advisory; the hard check is `gate.py`.
-
-Paper side after the first `merged` node: `ccf-experiment-designer` result tables from records → `ccf-paper-writer` → `ccf-paper-reviewer` on K3 → `ccf-integrity-auditor` → Reviewer `adversarial-review` once → `ccf-submission-checker`. Numbers enter the manuscript only from `records/`.
-
-## 7. Gates
-
-### 7.1 Type-A, `gate.py`
-
-- `card`: schema complete; `kill.threshold` numeric with direction; `n_required ≥ 3`; `mde` from `seed_sd` and `n_required`, and `mde < band[0]`; controls non-empty; `cost_gpu_h` within remaining budget and allocation caps; dedup query over tree hypotheses, `records/`, `LIT-LEDGER.md` returns no uncited hit.
-- `freeze`: writes `frozen_sha` into card and node; refuses if the card changed after the Explorer critique was appended.
-- `record`: `n_realized ≥ n_required`; `canary.pass`; `checkpoint_loaded_frac ≥ 0.9`; `band_hit` and `kill_hit` from the card; artifact shas verified; `blockers` empty or the state cannot be SUPPORTED.
-- `packet`: assembles card + record + paths + the fixed role prompt (adapted from ARIS `result-to-claim` and `experiment-audit`). Main never composes a packet.
-- `budget`: remaining GPU-h from `ledger.jsonl` against the GOAL.md ceiling; caps are GOAL.md parameters (defaults: oracle ≤ 5% of a card's cost, one T4 run ≤ 25% of remaining, reserve 20%).
-- `views`: renders the four views from tree and files.
-
-### 7.2 Type-B, Reviewer
-
-Input is the packet only. Output is JSON: `verdict ∈ {SUPPORTED, REFUTED, CONTESTED, UNVERIFIABLE}`, `criterion_met`, `blocking[]`. Binary against the card, never a score. Pre-launch review uses the plugin's native `review`, whose output follows `schemas/review-output.schema.json`; a `critical` finding blocks the launch token. Explorer findings on merge candidates are appended to the packet as advisory input and cannot block.
-
-### 7.3 Launcher and hooks
-
-- `run_protected.sh` refuses without a frozen card, a passing `gate.py card`, and a review token naming the card sha; appends the ledger at start and at unit exit with systemd wall-time and GPU. A `PreToolUse` hook denies `nohup`, `systemd-run`, or a GPU python outside the launcher.
-- `SessionStart` writes `.research/LOCK`; a second session with a live lock is read-only and the launcher refuses it.
-- `SubagentStop` identity probe (§4.1), which also rejects a report whose first line is not `METHOD:`.
-
-## 8. Component map
-
-| Stage | Adopted | Custom |
+| 步 | 给 | 扣留 |
 |---|---|---|
-| Bridges | idea-spark pattern cards and anti-patterns as Explorer reading | bridge schema, brief template |
-| Retrieval, dedup | `paper-search`, `scoop-check`, `corpus.py` | dedup query in `gate.py` |
-| Card | Scientist; `statistical-power`, `ablation-planner` | card schema |
-| State, merge guard | Arbor MCP; `arbor-agent-merge-eval` | node mapping |
-| Implement, run | ARIS `experiment-bridge`; `experiment-queue` for grids; `run_protected.sh`; Monitor | launcher extension |
-| Record | driveline JSONL shape | `render_record.py` |
-| Verdict | Codex plugin `review`, `task`, `adversarial-review`; ARIS `reviewer-independence`, `acceptance-gate`, `result-to-claim` prompt text | `gate.py`, packet and verdict schemas |
-| Write, submit | `ccf-experiment-designer`, `ccf-paper-writer`, `ccf-paper-reviewer`, `ccf-integrity-auditor`, `ccf-submission-checker`, `ccf-latex-templates` | none |
-| Disseminate (after acceptance) | `paper2assets`, `paper2poster`, `paper2blog` | none |
-| Overnight | `claude --bg` or OS cron `claude -p --resume --bare`; a heartbeat may nudge, never acquit | none |
+| M / Fable | claim 核心、anomalies.md、AVOID、held_out、networks | 任何方法、任何论文、网络 |
+| M / K3 | 机制列表、claim 句 | 我们的方法史、论文 |
+| M / Grok | 一个 (M,C) 与其检索句、A 的领域词、本地库路径、`search_papers.py` 真实参数 | 其它来源、CLAIM 正文 |
+| spec / Fable | claim 核心、机制图视图（每个 C 的 status/配方步骤/disanalogy/best/no_improve/tried）、本链最近 3 条或 `NO PRIOR RUNS`、parent{上版规格、record、monitor 理由、blockers}、榜单、numbers、AVOID ≤900 字符、trunk 文件清单 ≤80、结果契约；支持阶梯时另带 kept 规格与 rung | 他链规格、notebook error、文档、网络；对照链看不到机制图 |
+| build / GLM | 规格、qid、worktree、kill_cmd、protected_paths、结果契约（含 progress.json 契约）、实现类 AVOID；`--fix` 带 monitor 理由/findings + unit 日志尾 | CLAIM、榜单、他链、`.research/`、网络 |
+| build / Grok | steps、files、conditions、held_out、protected_paths、契约、硬规则；自己跑 `git diff` | builder 的报告、链历史、CLAIM 正文 |
+| build / Codex | worktree 路径 + 固定命令 | 一切 |
+| write | 节路径、keep records、其规格、机制图的 B/M、榜单、禁写清单 | — |
+| pivot / K3 | claim 核心、榜单、notebook 最近 30 条、机制图视图 | — |
 
-## 9. Custom inventory
+通用：JSON；ISOLATION 行；代码/日志/论文前 UNTRUSTED 行；`bundle.py` 断言字节上限，超限报错。
 
-| File | Lines | Job |
+## 5. 门（脚本）
+
+`gate.py spec` · `gate.py card`（含 CLAIM.sha、networks、worktree）· `gate.py monitor`（引文行、覆盖、截断、Codex P1）· `bundle.py token`（monitor 通过 ∧ diff sha 未变）· `run_protected.sh`（冻结、gate card、worktree、token、锁、同名 unit、同 GPU unit；清空 RESULTS_DIR；RuntimeMax；导出 EARLY_AT/EARLY_MIN/STALL_MIN）· `launch_wrap.sh`（smoke → canary；watchdog）· `gate.py record`（exit 0/4、mtime 窗口、blockers/progress 存在、clean_cost、metric、种子连续）· `stage.py` keep（valid ∧ band ∧ n≥3 ∧ CI95>0 ∧ 非 early）· `bundle.update_map`（patience 2）· `gate.py numbers` · `write-guard.py`（agent 不能写 CLAIM/GOAL/records/ledger/notebook/map/tokens/monitor/gates/queue/原稿/protected）。
+
+## 6. 止损（全部脚本）
+
+| 层 | 触发 | 结果 |
 |---|---|---|
-| `.research/gate.py` | ~250 | card, freeze, record, packet, budget, dedup, views |
-| `.research/render_record.py` | ~150 | result JSONs → record; ledger join; shas |
-| `scripts/run_protected.sh` | +40 | card, gate, token checks; ledger append |
-| `.claude/hooks/{launch-gate,identity-probe,session-lock}.py` | ~120 total | deny ungated launches; verify models and METHOD line; single writer |
-| `.claude/agents/{builder,scientist,explorer,researcher,reviewer}.md` | ~40 each | identity, model id, tools, required reading, brief and report contract |
-| `.research/briefs/TEMPLATE-<lane>.md` | ~15 each | the fifteen-line dispatch shape per lane; the Explorer template carries the bridge schema |
-| `CLAUDE.md` | ≤ 120 | model map, phase table, dispatch contract, six rules |
-| `GOAL.md` | +8 fields | metric, eval commands, ceiling, caps, protected paths, repo root, N scientists, venue |
+| smoke | canary 不在 tol 内 | unit exit 3，无 record，`build --fix` 一次 |
+| watchdog | fraction ≥ 0.25 且 dev_gain < 0.0；≥ 0.5 且 < 0.25（CLAIM `early_stop` 可改） | exit 4，合成 seed 文件，record 标 early_kill，算 kill，机制图计一次 |
+| watchdog | progress.json 45 min 不更新 / loss NaN | exit 5，基础设施失败，不计 |
+| 刷分 | 同一来源连续 2 版不刷新最好成绩 | 来源 exhausted，下一候选必须换来源 |
+| 全局 | 来源全部 exhausted/dropped，或 24 h / 24 GPU-h | P |
 
-Under 900 lines. No MCP server. No stage skills. No router skill.
+## 7. 失败语义
 
-## 10. Deployment
+workflow 返回 null → 队列 + notebook `error`；重试上限各 1 次（spec 门、monitor、smoke）；计数在磁盘；Codex 缺席 skipped；Grok 缺席不放行；`queue.json` 只增不删。
 
-1. `cp -r ~/.claude-kimi ~/.claude-research`; set the env block in §4.1 including `CODEX_REVIEW_GATE_GLOBAL=false`; keep `permissions.defaultMode`.
-2. `claude mcp add arbor -- arbor mcp` in that config. Remove `grill`, `playwright-extension`, `agent-browser` from the campaign config. The `codex` plugin stays enabled for its script; its slash commands are not used by the loop.
-3. `git init` in `ugra-rgbd-robust/` if needed; create `research-trunk`; Arbor run init; `tree_set_meta` from GOAL.md.
-4. Populate `.claude/skills/` exactly per §14: keep `paper-search`, `scoop-check`, `idea-spark` (references only), five CCFA skills plus `ccf-latex-templates`, `paper2*` dormant; copy ARIS `experiment-bridge`, `experiment-queue`, `shared-references`; `arbor install --project` then delete every `arbor-agent-*` except `merge-eval`; symlink `statistical-power` and `ablation-planner` from the global set. Remove the other 11 CCFA symlinks.
-5. Write the five agent files with REQUIRED READING, five brief templates, three hooks, two scripts, launcher extension.
-6. Run `claude-md-management:revise-claude-md` to produce CLAUDE.md from this spec.
-7. Acceptance test (§11) before the first real card.
+## 8. 人的触点
 
-## 11. Acceptance test
+accept；机制图无开放来源时读 `mechanism-map.json`；P 二选一（或带着 K3 的联想重跑 `step.py mechanism`）；D 读稿并清队列。
 
-- **Known-real card:** a prediction the frozen checkpoint already satisfies (the entire_missing canary). Must reach `SUPPORTED` with a blind Codex verdict and a ledger row.
-- **Known-null card:** a control that must fail (shuffled corruption arm). Must die at O or be `REFUTED` at V; the Reviewer must not be able to see why Main expected it to fail.
-- **Identity and METHOD probe:** one dispatch of each lane; every transcript's model matches its agent file; every report opens with `METHOD:`; Codex returns valid JSON through the plugin script.
-- **Lock:** a second session is refused by the launcher.
-- **Bridge cycle:** one R phase end to end produces `bridges/` with 3 to 5 entries each carrying a disanalogy, and one packet per bridge.
+## 9. 待 owner 定
 
-Implementation about one day; the acceptance test about two hours.
+- `keep_networks`/阶梯：默认阶梯 = 其余网络各一档 + 一档消融；`CLAIM.md` 可写 `support_ladder` 覆盖。
+- `keep_gain 1.0` 与 3 种子 MDE（clean sd 0.564 → 1.71）；confirm 用 CI 排除 0，可能要 5 种子。
+- beta 链的 `mode: baseline` 建议写进 CLAIM.md（现在靠 seed_method 里含 “baseline” 判断）。
 
-## 12. Removed on purpose
+## 10. 不做的
 
-Grill MCP and the six stage skills; idea-spark's five-phase run (180k to 250k tokens per idea); ARIS pipelines and review loops; eleven CCFA skills; `paperjury`; `autoresearch`, `auto-experiment`, `dse-loop`; the ChatGPT Playwright and Scholar lanes; the Codex stop-time review gate; MoA panels; agent teams; the Workflow tool; standing counters as triggers; Main as a reasoner.
-
-## 13. Risks
-
-1. **Codex quota.** Confined to B, V, and one pre-submission pass; the stop gate is off. `REVIEW_UNAVAILABLE` blocks a SUPPORTED state rather than substituting a same-family reviewer.
-2. **Fable quota.** N per cycle is a GOAL.md field; diagnosis calls count against it.
-3. **Explorer false rejections.** Structurally impossible: its output is bridges and advisory findings; it holds no gate.
-4. **Bridges that are vocabulary, not mechanism.** The bridge schema requires the disanalogy and the pattern; the Scientist rejects a bridge without a mechanism-level analogy before any card is written.
-5. **Arbor node schema is thin.** Cards live in files; if the constraints view is not enough lesson memory, `gate.py views` grows, not the MCP.
-6. **Proxy uptime.** The identity probe turns a silent substitution into a hard stop; fallback is Anthropic-direct for Fable and the `grok` CLI for retrieval.
-7. **Main drift into reasoning.** The dispatch contract is fifteen lines and paths only; any deviation is visible in `reports/`.
-
-## 14. Skills triage
-
-Legend: KEEP = as shipped · TRIM = named parts only · DROP = not loaded.
-
-| Source | Skill | Verdict | Used by | Reason |
-|---|---|---|---|---|
-| ResearchStudio (Microsoft) | `paper-search` | KEEP | Researcher | script-backed, six sources, selftest green |
-| ResearchStudio | `scoop-check` | KEEP | Researcher | script-backed novelty verdict per axis |
-| ResearchStudio | `idea-spark` | TRIM to `references/ideation-patterns/overview.md`, `anti-patterns.md` | Explorer | the 15 corpus-induced patterns are the bridge vocabulary; the 5-phase run is too slow |
-| ResearchStudio | `paper2assets`, `paper2poster`, `paper2blog` | KEEP, dormant | after acceptance | not part of the loop |
-| ResearchStudio | `paper2video`, `paper2reel` | DROP | — | external deck dependency, missing `ffprobe` |
-| OpenAI | `codex` plugin | KEEP: `review`, `task` read-only, `adversarial-review` | Reviewer | official runtime, structured review schema; stop gate disabled |
-| RUC-NLPIR | Arbor MCP | KEEP | Main | tree, eval, worktrees, held-out merge guard |
-| RUC-NLPIR | `arbor-agent-merge-eval` | KEEP | Main | merge and eval discipline |
-| RUC-NLPIR | other 10 `arbor-agent-*` | DROP | — | our loop replaces coordinator, ideate, executor |
-| ARIS | `experiment-bridge` | KEEP with `CODE_REVIEW=false` | Builder | implement → smoke → deploy discipline |
-| ARIS | `experiment-queue` | KEEP, only for ≥ 10 jobs | Builder | the one real scheduler (`queue_manager.py`); needs `.aris/tools` |
-| ARIS | `shared-references/reviewer-independence.md`, `acceptance-gate.md` | KEEP | Reviewer | the two contracts the packet enforces |
-| ARIS | `result-to-claim`, `experiment-audit` | TRIM to prompt text inside `gate.py packet` | — | their MCP backend is replaced by the plugin |
-| ARIS | everything else (`research-pipeline`, review loops, `kill-argument`, idea and paper skills) | DROP | — | pipelines we replace; `adversarial-review` covers kill-argument |
-| CCFA | `ccf-experiment-designer` | KEEP | Scientist at card time; paper tables | claim-evidence matrix, no-fabrication rule |
-| CCFA | `ccf-paper-writer`, `ccf-latex-templates` | KEEP | paper side | venue guides, templates present |
-| CCFA | `ccf-paper-reviewer` | KEEP | paper side on K3 | assessment-only, cheap, no Codex quota |
-| CCFA | `ccf-integrity-auditor`, `ccf-submission-checker` | KEEP | paper side | consistency and venue checks |
-| CCFA | `ccf-rebuttal-writer` | KEEP, dormant | after reviews | not loaded until needed |
-| CCFA | other 11 (`pipeline-orchestrator`, `scaffolder`, `idea-optimizer`, `idea-reviewer`, `literature-monitor`, `literature-searcher`, `humanization`, `paper-to-exemplar`, `visual-composer`, `skill-forger`, `common`) | DROP | — | orchestration we replace, prompt-only retrieval, unverifiable renderer, governance |
-| global | `statistical-power` | KEEP | Scientist | n and MDE before launch |
-| global | `ablation-planner` | KEEP | Scientist | design-time ablations, trivial baseline, negative control |
-| global | `experimental-design` | KEEP, on demand | Scientist | controls and blocking when a card needs them |
-| global | `paperjury`, `autoresearch`, `auto-experiment`, `dse-loop`, `what-if-oracle`, `paper-figure-loop` and the figure skills | DROP from the loop | — | different regime or paper-side tooling chosen later |
-| ours | grill, `research-*`, `sprint`, `web-review`, `grilling-science` | DROP | — | retired |
+陪审团、关键词文献循环、候选清单、K3 在 C 环内、Main 推理、外部 Python 驱动、并发顶层 workflow、为想法投票的排名器、并行铺开泛化实验。

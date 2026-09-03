@@ -3,7 +3,7 @@
 import json, os, sys, time
 from pathlib import Path
 
-W = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path.cwd())
+W = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 LOCK = W / ".research" / "LOCK"
 
 

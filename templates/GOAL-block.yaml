@@ -1,12 +1,10 @@
 campaign:
-  run_name: my-campaign
-  repo_root: .
-  metric: primary_metric_name
-  metric_direction: maximize
-  eval_cmd: "cd {cwd} && python scripts/arbor_eval.py --split dev --run-name {node_id}"
-  eval_cmd_test: "cd {cwd} && python scripts/arbor_eval.py --split test --run-name {node_id}"
-  protected_paths: ["scripts/arbor_eval.py", "configs/**"]
-  gpu_h_ceiling: 100
-  caps: {oracle_frac: 0.05, single_run_frac: 0.25, reserve_frac: 0.20}
-  n_scientists: 2
-  venue: TargetVenue
+  run_name: <short name>
+  repo_root: <experiment repo, relative to the project root; must have a research-trunk branch>
+  gpu_h_ceiling: 200
+  kill_cap_gpu_h: 4
+  caps: {oracle_frac: 0.05, single_run_frac: 0.25, reserve_frac: 0.2}
+  protected_paths: ["<scoring script>", "<test split list>"]
+  manuscripts: ["paper/main.tex"]
+  manuscript_rules: paper/.claude/CLAUDE.md
+  paper_sections: ["paper/sections/experiments.tex", "paper/sections/method.tex"]

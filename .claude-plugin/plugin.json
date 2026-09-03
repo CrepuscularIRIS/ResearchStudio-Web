@@ -1,8 +1,18 @@
 {
   "name": "research-harness",
-  "version": "0.1.0",
-  "description": "A simplified autonomous-research harness for Claude Code: five model lanes with one job each, pre-registered hypothesis cards adjudicated blind, script gates over artifacts, and a GPU ledger written by the launcher. Adopts existing skills (ResearchStudio, ARIS, CCFA, Arbor) instead of rebuilding them.",
-  "author": {"name": "CrepuscularIRIS"},
+  "version": "0.2.0",
+  "description": "The claim loop for Claude Code: one falsifiable claim, a mechanism map (claim \u2192 failure modes \u2192 abstract mechanisms \u2192 source domains with recipes), one candidate at a time, script gates over artifacts, a launcher-run smoke and watchdog that cut losses mid-run, and a support ladder that generalises only after one model keeps. Four model lanes plus Codex before launch.",
+  "author": {
+    "name": "CrepuscularIRIS"
+  },
   "license": "MIT",
-  "keywords": ["research", "autoresearch", "experiments", "pre-registration", "arbor", "codex"]
+  "keywords": [
+    "research",
+    "autoresearch",
+    "experiments",
+    "pre-registration",
+    "mechanism",
+    "codex",
+    "workflow"
+  ]
 }

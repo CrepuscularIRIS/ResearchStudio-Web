@@ -9,7 +9,7 @@ GPU_PY = re.compile(r"(CUDA_VISIBLE_DEVICES=|\btorchrun\b|--gpu\b).*\bpython[0-9
 
 
 def decide(command: str):
-    if "run_protected.sh" in command:
+    if "bin/run_protected.sh" in command:
         return None
     for rx, why in BANNED:
         if rx.search(command):
