@@ -293,6 +293,12 @@ def support_rungs(claim: dict, r: Path) -> dict:
 
 # ── per-chain sub-state machine ─────────────────────────────────────────────
 
+def eligible_source(s: dict, patience: int = 2) -> bool:
+    """A mechanism-map source the next spec may use: open, or tried with fewer than `patience` non-improving versions (the
+    number update_map exhausts on). One definition for the navigator, the bundle and the critique panel."""
+    return s.get("status") == "open" or (s.get("status") == "tried" and int(s.get("no_improve") or 0) < patience)
+
+
 def chain_next(name: str, cfg: dict, claim: dict, r: Path, idle: list[int], active=unit_active) -> dict:
     """Return {state, qid, lines[]} — exactly one next action for this chain."""
     g = int(cfg.get("gpu", -1))
@@ -325,6 +331,19 @@ def chain_next(name: str, cfg: dict, claim: dict, r: Path, idle: list[int], acti
                 return {"state": "spec_failed", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"spec failed the gate twice: {fail}\""]}
             return {"state": "spec_retry", "qid": q, "lines": [f"python3 .research/step.py propose {name} --retry"]}
         if spec.exists():
+            crit, cout = r / "critique" / f"{q}.json", r / "bundles" / f"critique-out-{q}.json"
+            if (r / "gates" / f"{q}.spec.ok").exists() and not baseline and not rung:          # Slot 2: the panel judges a gated mechanism spec before any card
+                if cout.exists() and (not crit.exists() or cout.stat().st_mtime > crit.stat().st_mtime):
+                    return {"state": "critique_out", "qid": q, "lines": [f"python3 .research/step.py critique --finish spec {q} {cout}"]}
+                if not crit.exists():
+                    return {"state": "critique_pending", "qid": q, "lines": [f"python3 .research/step.py critique spec {q}"]}
+                v = _json(crit).get("verdict")
+                if v == "revise":
+                    if retries.exists():
+                        return {"state": "critique_revise_twice", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"critique panel asked for a revision twice\""]}
+                    return {"state": "spec_retry", "qid": q, "lines": [f"python3 .research/step.py propose {name} --retry   # critique: revise"]}
+                if v == "abandon":
+                    return {"state": "critique_abandon", "qid": q, "lines": [f"python3 .research/bundle.py queue {q} \"critique panel: abandon\""]}
             return {"state": "spec_written", "qid": q, "lines": [f"python3 .research/step.py propose --finish {q}"]}
         rung_arg = f" --rung {rung['id']}" if rung else ""
         why = f"support rung {rung['id']} ({rung['kind']}: {rung['value']})" if rung else reason
@@ -390,6 +409,47 @@ def chain_next(name: str, cfg: dict, claim: dict, r: Path, idle: list[int], acti
 
 # ── stage decision ──────────────────────────────────────────────────────────
 
+def ship_incumbent(w: Path, r: Path, by: str, why: str) -> tuple[bool, str]:
+    """Exit (a) of stage P, as a recorded owner decision: the paper ships with the incumbent as its main-table row and every
+    candidate as a negative result. Refused without a saved pivot verdict, without a valid baseline record, or when a KEEP exists."""
+    claim = load_claim(w) or {}
+    pivots = sorted((r / "gates").glob("pivot-*.json")) if (r / "gates").exists() else []
+    if not pivots:
+        return False, "REFUSED: no saved pivot verdict (step.py pivot --finish <out>): exit (a) is chosen after the explorer spoke"
+    recs = records(r)
+    if keep_records(recs, claim):
+        return False, "REFUSED: a KEEP exists; the support ladder, not exit (a), finishes this paper"
+    base = [x for x in recs if x["_chain"] in baseline_chains(claim) and valid(x, claim)]
+    if not base:
+        return False, "REFUSED: no valid baseline-chain record: the incumbent has no number to ship"
+    if not why.strip():
+        return False, "REFUSED: --why is required (the ledger keeps the reason)"
+    ev = {"event": "ship_incumbent", "claim_sha": claim_sha(w), "pivot": pivots[-1].name, "baseline_records": [x["run"] for x in base],
+          "by": by, "why": why, "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    with (r / "ledger.jsonl").open("a") as fh:
+        fh.write(json.dumps(ev) + "\n")
+    (r / "SHIP-INCUMBENT").write_text(json.dumps(ev, indent=1))
+    return True, f"shipping the incumbent ({', '.join(ev['baseline_records'])}): stage D writes the negative result; delete .research/SHIP-INCUMBENT to reopen the search"
+
+
+def _stage_d(r: Path, head: str) -> dict:
+    """Stage D's sub-states: DONE marker → review verdict → the write workflow."""
+    if (r / "DONE").exists():
+        return {"stage": "DONE", "reason": (r / "DONE").read_text().strip() or "deliverables gate passed", "next": ["# nothing: the paper is built and gated"]}
+    review = _json(r / "gates" / "write-review.json")
+    if review.get("verdict") == "pass":
+        return {"stage": "D", "reason": head + "; final review passed",
+                "next": ["python3 .research/gate.py deliverables   # numbers on every section, review pass, main.pdf fresh → writes .research/DONE"]}
+    if review.get("verdict") == "block":
+        return {"stage": "D", "reason": head + "; final review BLOCKED",
+                "next": ["human: the final review blocked the manuscript — " + "; ".join(str(x) for x in (review.get("issues") or [])[:5]),
+                         "# after the fix: python3 .research/bundle.py write > .research/bundles/args-write.json → Workflow(name='write', ...) → step.py write --finish <out>"]}
+    return {"stage": "D", "reason": head,
+            "next": ["python3 .research/bundle.py write > .research/bundles/args-write.json",
+                     "Workflow(name='write', args=<contents of args-write.json>)   # writer (GLM) per section, polish (Fable), review (Grok)",
+                     "python3 .research/step.py write --finish .research/bundles/write-out.json   # saves the review verdict; stage D reads it"]}
+
+
 def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: list[int] | None = None, active=unit_active) -> dict:
     r = r or (w / ".research")
     now = now or time.time()
@@ -410,32 +470,30 @@ def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: l
     if not open_sources and not any(s.get("status") in ("tried", "exhausted") for s in mp.get("sources") or []):
         return {"stage": "R", "reason": "the mechanism map has no open source (all dropped: no recipe / precedent found) — owner reads .research/mechanism-map.json, then re-run step.py mechanism or edit CLAIM.md",
                 "next": ["human: read .research/mechanism-map.json"]}
+    pending = [s.get("id") for s in mp.get("sources") or [] if eligible_source(s) and not s.get("critique")]
+    if pending:                                                        # Slot 1: the panel judges every new eligible source before any spec
+        cout = r / "bundles" / "critique-sources-out.json"
+        if cout.exists() and cout.stat().st_mtime > (r / "mechanism-map.json").stat().st_mtime:
+            return {"stage": "M", "reason": f"critique panel output waiting for {len(pending)} sources", "next": [f"python3 .research/step.py critique --finish sources {cout}"]}
+        return {"stage": "M", "reason": f"{len(pending)} eligible sources not yet judged by the critique panel (Slot 1): {pending[:6]}",
+                "next": ["python3 .research/step.py critique sources",
+                         "Workflow(name='critique', args=<contents of .research/bundles/args-critique-sources.json>)   # critic-sol ∥ critic-k3 ∥ critic-glm",
+                         "python3 .research/step.py critique --finish sources .research/bundles/critique-sources-out.json"]}
     recs = records(r)
     ladder = support_rungs(claim, r)
     ladder_complete = ladder["kept"] and all(x["status"] in ("done", "queued") for x in ladder["rungs"])
     need_nets = int(claim.get("keep_networks", 1) or 1)
     nets_hit = networks_hit(recs, claim)
+    ship = _json(r / "SHIP-INCUMBENT")
+    if ship and ship.get("claim_sha") == claim_sha(w) and not ladder["kept"]:        # exit (a), recorded by `stage.py ship`
+        return _stage_d(r, f"exit (a): incumbent shipped by {ship.get('by')} — {ship.get('why')}; main table = baseline records, every candidate a negative result")
     if ladder_complete and len(nets_hit) < need_nets:
         return {"stage": "P", "reason": f"support ladder complete but only {len(nets_hit)}/{need_nets} networks reach the band ({sorted(nets_hit)}): the claim as written is not supported",
                 "next": ["python3 .research/bundle.py pivot > .research/bundles/args-pivot.json",
                          "Workflow(name='pivot', args=<contents of args-pivot.json>)   # explorer (K3) once",
                          "human: exit (a) ship the incumbent with the negative generalisation result, (b) edit CLAIM.md (keep_networks / networks) and re-accept"]}
     if ladder_complete:
-        if (r / "DONE").exists():
-            return {"stage": "DONE", "reason": (r / "DONE").read_text().strip() or "deliverables gate passed", "next": ["# nothing: the paper is built and gated"]}
-        review = _json(r / "gates" / "write-review.json")
-        head = f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)"
-        if review.get("verdict") == "pass":
-            return {"stage": "D", "reason": head + "; final review passed",
-                    "next": ["python3 .research/gate.py deliverables   # numbers on every section, review pass, main.pdf fresh → writes .research/DONE"]}
-        if review.get("verdict") == "block":
-            return {"stage": "D", "reason": head + "; final review BLOCKED",
-                    "next": ["human: the final review blocked the manuscript — " + "; ".join(str(x) for x in (review.get("issues") or [])[:5]),
-                             "# after the fix: python3 .research/bundle.py write > .research/bundles/args-write.json → Workflow(name='write', ...) → step.py write --finish <out>"]}
-        return {"stage": "D", "reason": head,
-                "next": ["python3 .research/bundle.py write > .research/bundles/args-write.json",
-                         "Workflow(name='write', args=<contents of args-write.json>)   # writer (GLM) per section, polish (Fable), review (Grok)",
-                         "python3 .research/step.py write --finish .research/bundles/write-out.json   # saves the review verdict; stage D reads it"]}
+        return _stage_d(r, f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)")
     qs = _json_list(r / "queue.json")[-3:]
     infra_rx = re.compile(r"returned nothing|infrastructure|stalled twice|exit 5", re.I)
     if len(qs) == 3 and all(infra_rx.search(str(e.get("text", ""))) for e in qs):
@@ -489,6 +547,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd")
     p = sub.add_parser("accept", help="owner only: record CLAIM.md's sha as accepted (logged to ledger.jsonl)"); p.add_argument("--by"); p.add_argument("--why")
+    p = sub.add_parser("ship", help="owner only: exit (a) — ship the incumbent with the negative result (needs a saved pivot verdict and a valid baseline record)"); p.add_argument("--by"); p.add_argument("--why", required=True)
     sub.add_parser("board", help="print the leaderboard")
     sub.add_parser("map", help="print the mechanism map's source statuses")
     sub.add_parser("json")
@@ -528,6 +587,9 @@ def main() -> int:
                                  "keep_networks": c.get("keep_networks"), "by": a.by or os.environ.get("USER", "owner"), "why": a.why or "",
                                  "t": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
         (HERE / "CLAIM.sha").write_text(claim_sha(W) + "\n"); print("accepted", claim_sha(W)[:12]); return 0
+    if a.cmd == "ship":
+        ok, msg = ship_incumbent(W, HERE, a.by or os.environ.get("USER", "owner"), a.why)
+        print(msg); return 0 if ok else 1
     if a.cmd == "board":
         print(board()); return 0
     if a.cmd == "map":

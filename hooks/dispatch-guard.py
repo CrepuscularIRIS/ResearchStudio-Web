@@ -18,10 +18,10 @@ import json, os, re, sys
 from pathlib import Path
 
 W = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
-BUDGET = {"builder": 80, "writer": 80, "researcher": 40, "scientist": 15, "reviewer": 12, "reader": 12, "explorer": 12}
+BUDGET = {"builder": 80, "writer": 80, "researcher": 40, "scientist": 15, "reviewer": 12, "reader": 12, "explorer": 12, "critic-sol": 8, "critic-k3": 8, "critic-glm": 8}
 DEFAULT_BUDGET = 40
 DOC_DIRS = (".research/", "plan/", ".claude/", "docs/", "paper/", ".grill/")
-LANES = "builder|writer|scientist|researcher|reviewer|reader|explorer"
+LANES = "builder|writer|scientist|researcher|reviewer|reader|explorer|critic-sol|critic-k3|critic-glm"
 SEARCH_RX = re.compile(r"search_papers\.py|corpus\.py|scoop-check|scoop_check", re.I)
 READ_CMD = re.compile(r"^\s*(?:cat|head|tail|less|more|sed\s+-n|grep\b.*?-r?n?\s|python3?\s+-c\s+.*open\()", re.S)
 PATH_RX = re.compile(r"(?:/home/\S+?|(?:\.research|plan|\.claude|docs|paper|\.grill)/\S+?)(?=[\s;,)\]\"'`]|$)")

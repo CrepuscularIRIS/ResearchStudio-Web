@@ -2,7 +2,8 @@ import pathlib, re
 W = pathlib.Path(__file__).resolve().parents[1]
 A = W / "agents"
 LANES = {"builder": "glm-5.3[1m]", "scientist": "claude-fable-5-1", "explorer": "k3-256k",
-         "researcher": "grok-4.6", "reviewer": "glm-5.3[1m]", "writer": "glm-5.3[1m]"}
+         "researcher": "grok-4.6", "reviewer": "glm-5.3[1m]", "writer": "glm-5.3[1m]",
+         "critic-sol": "gpt-5.6-sol", "critic-k3": "k3-256k", "critic-glm": "glm-5.3[1m]"}     # the critique panel: three families, one prompt
 
 def test_agent_files():
     for lane, model in LANES.items():

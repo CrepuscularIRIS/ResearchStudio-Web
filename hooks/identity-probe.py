@@ -16,7 +16,8 @@ def same_model(declared: str, reported: str) -> bool:
     variant suffixes; a different family never shares the base, so swaps still
     fail. Residual risk: a same-base tier variant (glm-5.3-flash) would pass."""
     base = re.sub(r"\[[^\]]*\]$", "", declared)
-    return reported == declared or reported == base or reported.startswith(base + "-")
+    rep = re.sub(r"\([^)]*\)$", "", re.sub(r"^[a-z0-9_.-]+/", "", reported))   # litellm may echo provider/name(effort): openai/gpt-5.6-sol(high)
+    return reported == declared or rep == base or rep.startswith(base + "-")
 
 
 def probe(agent_type: str, transcript_text: str, last_msg: str, agents_dir: Path):

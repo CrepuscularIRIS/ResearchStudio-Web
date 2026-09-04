@@ -3,7 +3,7 @@ import re, shutil, subprocess
 from pathlib import Path
 
 WF = Path(__file__).resolve().parents[1] / "workflows"
-EXPECTED = {"frame": "scientist", "mechanism": "scientist", "spec": "scientist", "build": "builder", "write": "writer", "pivot": "explorer"}
+EXPECTED = {"frame": "scientist", "mechanism": "scientist", "spec": "scientist", "build": "builder", "write": "writer", "pivot": "explorer", "critique": "critic-k3"}
 
 
 def test_workflow_files_present_and_wellformed():
@@ -14,9 +14,11 @@ def test_workflow_files_present_and_wellformed():
         assert re.search(r"^export const meta = \{", s, re.M), f"{name}: meta must be a top-level literal"
         assert f"name: '{name}'" in s
         assert "typeof args === 'string' ? JSON.parse(args) : args" in s, f"{name}: args must be parsed defensively (harness passes a JSON string)"
-        assert f"agentType: '{lane}'" in s, f"{name}: must dispatch through the {lane} lane"
+        assert f"agentType: '{lane}'" in s or (name == "critique" and f"'{lane}'" in s), f"{name}: must dispatch through the {lane} lane"
         if name == "build":
-            assert "agentType: 'researcher'" in s and "agentType: 'reviewer'" in s and "parallel([" in s, "build carries the Grok monitor and the Codex lens after the builder"
+            assert "agentType: 'reviewer'" in s and "agentType: 'monitor'" not in s, "build carries ONE external lens (the Grok plugin via the reviewer forwarder); the GLM monitor lane was retired 2026-09-04"
+            assert "agentType: 'researcher'" not in s, "the diff monitor left the Grok researcher lane on 2026-09-03"
+            assert "monitor: { external" in s, "the lens slot is `monitor.external`, what gate.py/step.py read"
             assert "smoke: {" not in s and "'pass', 'fail'" not in s, "the builder never self-reports a smoke verdict"
         if name == "mechanism":
             assert "agentType: 'explorer'" in s and "agentType: 'researcher'" in s, "mechanism: Fable abstracts, K3 diverges, Grok retrieves"

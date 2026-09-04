@@ -1,16 +1,16 @@
-// build.workflow.js — stage C3+C4 in ONE workflow: the builder (GLM) implements the frozen spec in its worktree, then two independent
-// lenses read the diff: the Grok monitor (coverage per spec step + leakage findings, every claim quoting diff lines) and the Codex
-// code review (external CLI). The builder never sees the lenses; the lenses never see the builder's report.
-// args: { qid, worktree, prompt, monitor_prompt, codex_prompt }  from `bundle.py build <qid> [--fix]`.
-// Returns { qid, build, monitor: { grok, codex } }. The orchestrator then runs `step.py build --finish <qid> <saved json>`, which
-// verifies every quoted line against the real diff (gate.py monitor), writes the token and launches. Null lenses are never verdicts:
-// a null Grok fails closed (no launch), a null Codex is skipped.
+// build.workflow.js — stage C3+C4 in ONE workflow: the builder (GLM) implements the frozen spec in its worktree, then ONE external
+// lens reads the diff: the Grok plugin code review (reviewer lane = thin forwarder). The GLM monitor lens was retired 2026-09-04
+// (it stalled on large diffs and dead-locked the chain); spec coverage is now a script fact in gate.py (every step's file in the
+// diff) and the review focus asks Grok to flag an unimplemented step as `high`. The builder never sees the lens; the lens never
+// sees the builder's report. args: { qid, worktree, prompt, review_prompt }  from `bundle.py build <qid> [--fix]`.
+// Returns { qid, build, monitor: { external } }. The orchestrator then runs `step.py build --finish <qid> <saved json>` (gate.py
+// monitor → token → launch). A null or unavailable lens is never a verdict: step.py counts it as infrastructure and retries.
 export const meta = {
   name: 'build',
-  description: 'Builder implements one frozen spec; then Grok monitor and Codex review read the diff in parallel; quotes are verified by script afterwards.',
+  description: 'Builder implements one frozen spec; the Grok plugin reviews the diff; script checks coverage and gates the launch.',
   phases: [
     { title: 'Build', detail: 'builder (GLM) in the worktree; no self-reported verdict' },
-    { title: 'Monitor', detail: 'researcher (Grok) coverage/leakage lens ∥ reviewer (Codex) code review' },
+    { title: 'Review', detail: 'reviewer (forwarder) → Grok plugin review --json' },
   ],
 }
 
@@ -24,20 +24,10 @@ const RESULT = {
     notes: { type: 'string' },
   },
 }
-const GROK = {
-  type: 'object', required: ['approved', 'coverage', 'findings'],
-  properties: {
-    approved: { type: 'boolean' },
-    coverage: { type: 'array', items: { type: 'object', required: ['step_id', 'status', 'diff_lines'],
-      properties: { step_id: { type: 'string' }, status: { enum: ['implemented', 'missing', 'changed'] }, diff_lines: { type: 'array', items: { type: 'string' } } } } },
-    findings: { type: 'array', items: { type: 'object', required: ['kind', 'diff_lines', 'text'],
-      properties: { kind: { enum: ['leak', 'protected', 'hardcode', 'held_out_in_training', 'contract', 'extra_mechanism'] }, diff_lines: { type: 'array', items: { type: 'string' } }, text: { type: 'string' } } } },
-  },
-}
-const CODEX = {
+const EXTERNAL = {
   type: 'object', required: ['available', 'findings'],
   properties: {
-    available: { type: 'boolean' }, raw: { type: 'string' },
+    available: { type: 'boolean' }, verdict: { type: 'string' }, raw: { type: 'string' },
     findings: { type: 'array', items: { type: 'object', required: ['severity', 'file', 'line', 'text'],
       properties: { severity: { type: 'string' }, file: { type: 'string' }, line: { type: 'number' }, text: { type: 'string' } } } },
   },
@@ -46,17 +36,15 @@ const CODEX = {
 phase('Build')
 const b = await agent(A.prompt + '\n\nStructured output only.', { agentType: 'builder', label: `build:${A.qid}`, phase: 'Build', schema: RESULT, stallMs: 600000 })
 if (!b) {
-  log(`${A.qid}: builder returned nothing (infrastructure failure) — no monitor run`)
-  return { qid: A.qid, build: null, monitor: { grok: null, codex: null }, error: 'builder returned nothing' }
+  log(`${A.qid}: builder returned nothing (infrastructure failure) — no review run`)
+  return { qid: A.qid, build: null, monitor: { external: null }, error: 'builder returned nothing' }
 }
 log(`${A.qid}: ${b.files_changed.length} files changed · ${b.deviations.length} deviations · ${b.blockers.length} blockers`)
 
-phase('Monitor')
-const [grok, codex] = await parallel([
-  () => agent(A.monitor_prompt + '\n\nStructured output only.', { agentType: 'researcher', label: `monitor:${A.qid}`, phase: 'Monitor', schema: GROK, stallMs: 600000 }),
-  () => A.codex_prompt ? agent(A.codex_prompt, { agentType: 'reviewer', label: `codex:${A.qid}`, phase: 'Monitor', schema: CODEX, stallMs: 900000 }) : Promise.resolve(null),
-])
-if (!grok) log(`${A.qid}: Grok lens returned nothing — the gate will not approve (fail-closed)`)
-if (!codex) log(`${A.qid}: Codex lens unavailable — skipped, not a verdict`)
-log(`${A.qid}: grok ${grok ? (grok.approved ? 'APPROVED' : 'REJECTED') : 'null'} (${grok ? grok.findings.length : 0} findings) · codex ${codex && codex.available ? codex.findings.length + ' findings' : 'skipped'}`)
-return { qid: A.qid, build: b, monitor: { grok: grok || { approved: false, coverage: [], findings: [] }, codex: codex || { available: false, findings: [] } } }
+phase('Review')
+const external = A.review_prompt
+  ? await agent(A.review_prompt, { agentType: 'reviewer', label: `review:${A.qid}`, phase: 'Review', schema: EXTERNAL, stallMs: 900000 })
+  : null
+if (!external) log(`${A.qid}: external review returned nothing — infrastructure, not a verdict (step.py retries)`)
+else log(`${A.qid}: review ${external.available ? (external.verdict || 'done') + ' · ' + external.findings.length + ' findings' : 'UNAVAILABLE'}`)
+return { qid: A.qid, build: b, monitor: { external: external } }

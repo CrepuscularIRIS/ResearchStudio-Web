@@ -2,7 +2,7 @@
 import json, os, pathlib, subprocess, sys, time
 from datetime import datetime
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import gate  # noqa: E402
 
 CLAIM = {"held_out": "structured interference class: mirrored map + smoothed random field; never in any training condition",
@@ -48,6 +48,25 @@ def test_spec_gate_passes_a_b1_spec_and_rejects_b2(tmp_path):
     assert any("gpu_h" in x for x in gate.check_spec(s, CLAIM, r, 4.0))
     s = good_spec(); s["kill_cmd"] = "python scripts/train.py"
     assert sum("kill_cmd must honour" in x for x in gate.check_spec(s, CLAIM, r, 4.0)) == 2
+
+
+def test_kill_cmd_absolute_paths_only_from_substrate(tmp_path):
+    """Bug 2026-09-03: kill_cmd banned every /home path, but the substrate design REQUIRES the read-only dataset and
+    checkpoint paths. Only paths under substrate.json roots pass; anything else outside the worktree still fails."""
+    r = repo(tmp_path)
+    rdir = tmp_path / "research"; rdir.mkdir()
+    (rdir / "substrate.json").write_text(json.dumps({"_note": "x", "datasets": {"NYU": "/home/u/ds/NYU/"},
+                                                     "frozen_hosts": {"A": {"ckpt": "/home/u/ck/a.pth", "canary": {"src": "/data/runs/{1..4}.json"}}}}))
+    allowed = gate.substrate_paths(rdir)
+    assert allowed == ["/data/runs/{1..4}.json", "/home/u/ck/a.pth", "/home/u/ds/NYU"]
+    assert gate.substrate_paths(tmp_path / "missing") == []                       # no substrate.json → nothing whitelisted
+    s = good_spec(); s["kill_cmd"] += " --data /home/u/ds/NYU/train.txt --ckpt /home/u/ck/a.pth"
+    assert any("outside the substrate" in x for x in gate.check_spec(s, CLAIM, r, 4.0))       # no whitelist: still refused
+    assert gate.check_spec(s, CLAIM, r, 4.0, allowed_abs=allowed) == []                      # substrate root + file under it
+    s["kill_cmd"] += " --extra /home/u/ds/NYU2/x"                                            # sibling of a root is not under it
+    assert any("/home/u/ds/NYU2/x" in x for x in gate.check_spec(s, CLAIM, r, 4.0, allowed_abs=allowed))
+    s = good_spec(); s["kill_cmd"] += " && pip install foo"
+    assert any("no package installs" in x for x in gate.check_spec(s, CLAIM, r, 4.0, allowed_abs=allowed))
     s = good_spec(); s["canary"]["tol"] = 0
     assert any("canary" in x for x in gate.check_spec(s, CLAIM, r, 4.0))
     s = good_spec(); s["naive_baseline"] = "none"
@@ -80,29 +99,22 @@ DIFF = """diff --git a/a.py b/a.py
 STEPS = [{"id": "s1", "file": "a.py", "change": "x"}, {"id": "s2", "file": "a.py", "change": "y"}]
 
 
-def test_monitor_gate_verifies_quotes_and_coverage():
-    out = {"grok": {"approved": True, "findings": [],
-                    "coverage": [{"step_id": "s1", "status": "implemented", "diff_lines": ["+mask = mask * torch.empty_like(mask).uniform_(0.05, 1.0)"]},
-                                 {"step_id": "s2", "status": "implemented", "diff_lines": ["+sampler = ConditionSampler([\"complete\", \"missing\", \"amplitude\"])"]}]},
-           "codex": {"available": True, "findings": [{"severity": "P3", "file": "a.py", "line": 2, "text": "style"}]}}
+def test_monitor_gate_external_lens_and_script_coverage():
+    out = {"external": {"available": True, "verdict": "approve", "raw": "{}",
+                        "findings": [{"severity": "low", "file": "a.py", "line": 2, "text": "style"}]}}
     ok, reasons = gate.check_monitor(out, DIFF, STEPS, truncated=False)
     assert ok and reasons == []
-    bad = json.loads(json.dumps(out)); bad["grok"]["coverage"][0]["diff_lines"] = ["+mask = mask * 2  # invented"]
+    bad = json.loads(json.dumps(out)); bad["external"]["findings"] = [{"severity": "high", "file": "a.py", "line": 2, "text": "reads the test split"}]
     ok, reasons = gate.check_monitor(bad, DIFF, STEPS, truncated=False)
-    assert not ok and any("not in the diff" in r for r in reasons), "a quote that is not in the diff is a tell"
-    bad = json.loads(json.dumps(out)); bad["grok"]["coverage"].pop()
-    ok, reasons = gate.check_monitor(bad, DIFF, STEPS, truncated=False)
-    assert not ok and any("s2: no coverage" in r for r in reasons)
-    bad = json.loads(json.dumps(out)); bad["grok"]["coverage"][1]["status"] = "missing"
+    assert not ok and any("review high" in r for r in reasons)
+    bad = json.loads(json.dumps(out)); bad["external"]["findings"] = [{"severity": "critical", "file": "a.py", "line": 2, "text": "x"}]
     assert not gate.check_monitor(bad, DIFF, STEPS, truncated=False)[0]
+    ok, reasons = gate.check_monitor(out, DIFF, STEPS + [{"id": "s3", "file": "b.py", "change": "z"}], truncated=False)
+    assert not ok and any("s3: file b.py is not in the diff" in r for r in reasons), "a step whose file the diff never touches was not implemented"
     assert not gate.check_monitor(out, DIFF, STEPS, truncated=True)[0], "a truncated diff is never approved"
-    bad = json.loads(json.dumps(out)); bad["codex"]["findings"] = [{"severity": "P1", "file": "a.py", "line": 2, "text": "reads the test split"}]
-    ok, reasons = gate.check_monitor(bad, DIFF, STEPS, truncated=False)
-    assert not ok and any("codex P1" in r for r in reasons)
-    skipped = json.loads(json.dumps(out)); skipped["codex"] = {"available": False, "findings": []}
-    assert gate.check_monitor(skipped, DIFF, STEPS, truncated=False)[0], "an unavailable Codex is skipped, never a verdict"
-    bad = json.loads(json.dumps(out)); bad["grok"]["findings"] = [{"kind": "hardcode", "diff_lines": ["+mask = mask * torch.empty_like(mask).uniform_(0.05, 1.0)"], "text": "constant result"}]
-    assert not gate.check_monitor(bad, DIFF, STEPS, truncated=False)[0]
+    ok, reasons = gate.check_monitor({"external": {"available": False, "findings": []}}, DIFF, STEPS, truncated=False)
+    assert not ok and any("unavailable" in r for r in reasons), "no lens = no launch (step.py treats it as infrastructure before the gate runs)"
+    assert not gate.check_monitor(out, "", STEPS, truncated=False)[0], "an empty diff is never approved"
 
 
 def test_record_provenance(tmp_path):
@@ -224,9 +236,9 @@ def test_spec_gate_hygiene_and_source(tmp_path):
     assert gate.gate_spec("Q-0001-alpha", rdir) == 0
 
 
-def test_monitor_gate_refuses_gitlinks_and_hidden_codex_findings():
+def test_monitor_gate_refuses_gitlinks_and_hidden_review_findings():
     diff = "diff --git a/repos/DFormer b/repos/DFormer\n-Subproject commit aaa\n+Subproject commit bbb-dirty\n"
-    out = {"grok": {"approved": True, "coverage": [{"step_id": "s1", "status": "implemented", "diff_lines": ["-Subproject commit aaa"]}], "findings": []},
-           "codex": {"available": True, "findings": [{"severity": "low", "text": "x"}], "raw": "[P1] eval split leaks into training"}}
-    ok, reasons = gate.check_monitor(out, diff, [{"id": "s1"}], False)
+    out = {"external": {"available": True, "verdict": "approve", "findings": [{"severity": "low", "file": "x", "line": 1, "text": "x"}],
+                        "raw": '{"findings":[{"severity":"critical","text":"eval split leaks into training"}]}'}}
+    ok, reasons = gate.check_monitor(out, diff, [{"id": "s1", "file": "repos/DFormer"}], False)
     assert ok, "check_monitor itself passes; the gitlink and forwarder checks live in gate_monitor (they need the worktree)"

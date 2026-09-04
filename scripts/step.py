@@ -56,6 +56,9 @@ def propose(chain: str, retry: bool = False, rung: str | None = None) -> int:
         say(r.stderr.strip()); return 1
     d = json.loads(r.stdout)
     (HERE / "bundles" / f"args-spec-{d['qid']}.json").write_text(r.stdout)
+    if retry:                                                      # the revised spec must pass the gate and the panel again
+        for p in (HERE / "gates" / f"{d['qid']}.spec.ok", HERE / "critique" / f"{d['qid']}.json", HERE / "bundles" / f"critique-out-{d['qid']}.json"):
+            p.unlink(missing_ok=True)
     say(f"Workflow(name='spec', args=<contents of .research/bundles/args-spec-{d['qid']}.json>)   # scientist (Fable) writes {d['spec_path']}",
         f"then: python3 .research/step.py propose --finish {d['qid']}")
     return 0
@@ -79,6 +82,13 @@ def propose_finish(qid: str, out_path: str | None = None) -> int:
                 return 1
             say("spec gate failed:", r.stdout.strip(), f"→ python3 .research/step.py propose {chain} --retry   # Fable gets the failure list once")
             return 1
+    mode = stage._json(HERE / "bundles" / f"args-spec-{qid}.json").get("mode", "mechanism")
+    crit = stage._json(HERE / "critique" / f"{qid}.json")
+    if mode == "mechanism" and not (HERE / "cards" / f"{qid}.json").exists():
+        if not crit:
+            say(f"{qid}: spec gated; the critique panel has not judged it (Slot 2) → python3 .research/step.py critique spec {qid}"); return 1
+        if crit.get("verdict") != "advance":
+            say(f"{qid}: critique verdict {crit.get('verdict')} — no card (stage.py prints the retry or the queue)"); return 1
     card_p = HERE / "cards" / f"{qid}.json"
     if not card_p.exists():
         r = py(str(HERE / "bundle.py"), "card", str(spec_p))
@@ -110,6 +120,64 @@ def propose_finish(qid: str, out_path: str | None = None) -> int:
     return 0
 
 
+# ── critique (Slot 1 sources / Slot 2 spec) ─────────────────────────────────
+
+def critique(kind: str, qid: str | None = None) -> int:
+    import critique as cq  # noqa: E402
+    d = cq.cmd_sources() if kind == "sources" else cq.cmd_spec(qid)
+    p = HERE / "bundles" / ("args-critique-sources.json" if kind == "sources" else f"args-critique-{qid}.json")
+    p.write_text(json.dumps(d, indent=1, ensure_ascii=False))
+    out = HERE / "bundles" / ("critique-sources-out.json" if kind == "sources" else f"critique-out-{qid}.json")
+    say(f"Workflow(name='critique', args=<contents of {p}>)   # critic-sol ∥ critic-k3 ∥ critic-glm, save the returned JSON to {out}",
+        f"then: python3 .research/step.py critique --finish {kind}{' ' + qid if qid else ''} {out}")
+    return 0
+
+
+def critique_finish(kind: str, qid: str | None, out_path: str) -> int:
+    import critique as cq  # noqa: E402
+    out = stage._json(Path(out_path))
+    panel = out.get("panel") if isinstance(out.get("panel"), dict) else {}
+    key = "sources" if kind == "sources" else qid
+    args = stage._json(HERE / "bundles" / ("args-critique-sources.json" if kind == "sources" else f"args-critique-{qid}.json"))
+    text = str(args.get("prompt") or "")
+    (HERE / "critique").mkdir(exist_ok=True)
+    if not any(isinstance(v, dict) for v in panel.values()) or not text:
+        infra_p = HERE / "critique" / f"{key}.infra"
+        n = int(infra_p.read_text().strip() or 0) + 1 if infra_p.exists() else 1
+        infra_p.write_text(f"{n}\n")
+        Path(out_path).rename(Path(out_path).with_suffix(f".null{n}.json"))
+        if n >= 2 and kind == "spec":
+            say(f"{qid}: critique panel returned nothing twice → python3 .research/bundle.py queue {qid} \"critique panel returned nothing twice (infrastructure)\"")
+        else:
+            say(f"critique {key}: no family answered (infrastructure failure, not a verdict) → python3 .research/step.py critique {kind}{' ' + qid if qid else ''}")
+        return 1
+    if kind == "sources":
+        agg = cq.aggregate_sources(panel, text, list(args.get("ids") or []))
+        mp = stage._json(HERE / "mechanism-map.json")
+        counts = cq.apply_sources(mp, agg)
+        (HERE / "mechanism-map.json").write_text(json.dumps(mp, indent=1, ensure_ascii=False))
+        say(f"critique sources: {counts}", *[f"  {sid}: {a['decision']} · rank {a['rank_mean']}{' · contested' if a['contested'] else ''} · " +
+                                            ", ".join(f"{f}={v['verdict']}" + (f"[{','.join(v['fails'])}]" if v['fails'] else "") for f, v in a["panel"].items())
+                                            for sid, a in agg.items()], "next: python3 .research/stage.py")
+        return 0
+    agg = cq.aggregate_spec(panel, text)
+    rec = {**agg, "qid": qid, "t": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    (HERE / "critique" / f"{qid}.json").write_text(json.dumps(rec, indent=1, ensure_ascii=False))
+    per = " · ".join(f"{f}={v['verdict']}→{v['effective']} ({v['anchored']} anchored, {v['unanchored']} dropped)" for f, v in agg["per_model"].items())
+    if agg["verdict"] == "advance":
+        say(f"{qid}: critique ADVANCE — {per}", f"next: python3 .research/step.py propose --finish {qid}"); return 0
+    fails = [f"{f['family']}/{f['check']} [{f['severity']}]: {f['text']} — \"{str(f['quote'])[:120]}\"" for f in agg["findings"]]
+    if agg["verdict"] == "revise":
+        (HERE / "gates" / f"{qid}.critique.fail.json").write_text(json.dumps({"fails": fails, "revision_target": agg["revision_target"]}, indent=1, ensure_ascii=False))
+        chain = qid.split("-")[-1]
+        nxt = f"python3 .research/bundle.py queue {qid} \"critique panel asked for a revision twice\"" if (HERE / "gates" / f"{qid}.spec.retries").exists() else f"python3 .research/step.py propose {chain} --retry"
+        say(f"{qid}: critique REVISE — {per}", *[f"  - {x}" for x in fails[:6]], f"next: {nxt}"); return 1
+    src = args.get("source")
+    pen = cq.penalize_source(src, f"{qid}: " + "; ".join(fails[:3])) if src else None
+    r = py(str(HERE / "bundle.py"), "queue", qid, "critique panel: abandon — " + "; ".join(fails[:3])[:400])
+    say(f"{qid}: critique ABANDON — {per}", *[f"  - {x}" for x in fails[:6]], f"source {src}: {pen}" if pen else f"source {src}: not penalised (not open/tried)", r.stdout.strip()[:200], "next: python3 .research/stage.py"); return 1
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 
 def build(qid: str, fix: bool = False) -> int:
@@ -117,7 +185,7 @@ def build(qid: str, fix: bool = False) -> int:
     if r.returncode:
         say(r.stderr.strip()); return 1
     (HERE / "bundles" / f"args-build-{qid}.json").write_text(r.stdout)
-    say(f"Workflow(name='build', args=<contents of .research/bundles/args-build-{qid}.json>)   # builder (GLM) → Grok monitor ∥ Codex",
+    say(f"Workflow(name='build', args=<contents of .research/bundles/args-build-{qid}.json>)   # builder (GLM) → monitor (GLM) ∥ Codex",
         f"save the returned JSON to .research/bundles/build-out-{qid}.json, then: python3 .research/step.py build --finish {qid} .research/bundles/build-out-{qid}.json")
     return 0
 
@@ -129,15 +197,16 @@ def build_finish(qid: str, out_path: str, gpu: int | None = None) -> int:
     (HERE / "build").mkdir(exist_ok=True)
     mon_p = HERE / "monitor" / f"{qid}.json"
     fresh = bool(out.get("monitor")) and (not mon_p.exists() or out_p.stat().st_mtime > mon_p.stat().st_mtime)
-    if fresh and (out.get("build") is None or (out.get("monitor") or {}).get("grok") is None):
+    ext = (out.get("monitor") or {}).get("external")
+    if fresh and (out.get("build") is None or ext is None or not ext.get("available")):
         infra_p = HERE / "build" / f"{qid}.infra"
         n_infra = int(infra_p.read_text().strip() or 0) + 1 if infra_p.exists() else 1
         infra_p.write_text(f"{n_infra}\n")
         out_p.rename(out_p.with_suffix(f".null{n_infra}.json"))          # not a verdict: never gate an empty output
         if n_infra >= 2:
-            say(f"{qid}: builder/monitor returned nothing twice → python3 .research/bundle.py queue {qid} \"build workflow returned nothing twice (infrastructure)\"")
+            say(f"{qid}: builder or the external review returned nothing twice → python3 .research/bundle.py queue {qid} \"build workflow returned nothing twice (infrastructure)\"")
         else:
-            say(f"{qid}: builder or monitor lens returned nothing (infrastructure failure, not a rejection) → python3 .research/step.py build {qid}{' --fix' if (HERE / 'build' / f'{qid}.fixes').exists() else ''}")
+            say(f"{qid}: builder or the external review returned nothing / unavailable (infrastructure failure, not a rejection) → python3 .research/step.py build {qid}{' --fix' if (HERE / 'build' / f'{qid}.fixes').exists() else ''}")
         return 1
     if fresh:
         (HERE / "build" / f"{qid}.json").write_text(json.dumps(out.get("build") or {}, indent=1, ensure_ascii=False))
@@ -261,18 +330,29 @@ def main() -> int:
     ap = argparse.ArgumentParser(); sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("mechanism"); p.add_argument("--finish")
     p = sub.add_parser("propose"); p.add_argument("chain", nargs="?"); p.add_argument("--finish"); p.add_argument("out", nargs="?"); p.add_argument("--retry", action="store_true"); p.add_argument("--rung")
+    p = sub.add_parser("critique", help="critique sources | critique spec <Q> | critique --finish sources <out> | critique --finish spec <Q> <out>")
+    p.add_argument("kind", choices=["sources", "spec"]); p.add_argument("rest", nargs="*"); p.add_argument("--finish", action="store_true")
     p = sub.add_parser("write"); p.add_argument("--finish", required=True)
     p = sub.add_parser("pivot"); p.add_argument("--finish", required=True)
     p = sub.add_parser("status"); p.add_argument("qid")
     p = sub.add_parser("build"); p.add_argument("qid"); p.add_argument("--finish"); p.add_argument("--fix", action="store_true"); p.add_argument("--gpu", type=int)
     p = sub.add_parser("record"); p.add_argument("qid"); p.add_argument("--gpu", type=int)
     a = ap.parse_args()
-    for d in ("bundles", "gates", "build", "monitor", "tokens", "records", "cards"):
+    hook = W / ".claude" / "hooks" / "session-lock.py"          # single writer: refuse under another live session, take over a dead/stale one
+    if a.cmd != "status" and hook.exists() and subprocess.run([sys.executable, str(hook), "--check", str(os.getpid())]).returncode:
+        return 1
+    for d in ("bundles", "gates", "build", "monitor", "tokens", "records", "cards", "critique"):
         (HERE / d).mkdir(exist_ok=True)
     if a.cmd == "mechanism":
         return mechanism(a.finish)
     if a.cmd == "propose":
         return propose_finish(a.finish, a.out or a.chain) if a.finish else propose(a.chain, a.retry, a.rung)
+    if a.cmd == "critique":
+        qid = a.rest[0] if a.kind == "spec" and a.rest else None
+        out = (a.rest[1] if a.kind == "spec" else (a.rest[0] if a.rest else None)) if a.finish else None
+        if a.kind == "spec" and not qid or (a.finish and not out):
+            say("usage: critique sources | critique spec <Q> | critique --finish sources <out> | critique --finish spec <Q> <out>"); return 2
+        return critique_finish(a.kind, qid, out) if a.finish else critique(a.kind, qid)
     if a.cmd == "write":
         return write_finish(a.finish)
     if a.cmd == "pivot":

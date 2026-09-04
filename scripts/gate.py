@@ -464,7 +464,33 @@ def _trunk_has(repo: Path, rel: str) -> bool:
         return (repo / rel).exists()
 
 
-def check_spec(spec: dict, claim: dict, repo: Path, cap_gpu_h: float) -> list[str]:
+def substrate_paths(rdir: Path = HERE) -> list[str]:
+    """Every absolute path string in substrate.json (owner-maintained, read-only): the ONLY absolute paths a
+    kill_cmd may reference — the substrate block itself instructs specs to use these paths and never copy them."""
+    sub = {}
+    p = rdir / "substrate.json"
+    if p.exists():
+        try:
+            sub = json.loads(p.read_text())
+        except json.JSONDecodeError:
+            sub = {}
+    out: list[str] = []
+
+    def walk(v):
+        if isinstance(v, str) and v.startswith("/") and len(v) > 1:
+            out.append(v.rstrip("/"))
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(sub)
+    return sorted(set(out))
+
+
+def check_spec(spec: dict, claim: dict, repo: Path, cap_gpu_h: float, allowed_abs: list[str] | None = None) -> list[str]:
     fails = []
     steps = spec.get("steps") or []
     files = set(spec.get("files") or [])
@@ -514,8 +540,12 @@ def check_spec(spec: dict, claim: dict, repo: Path, cap_gpu_h: float) -> list[st
         fails.append("method_prose: 6-12 sentences of method text are required before any result exists (frozen with the card)")
     elif re.search(r"\d+\.\d+|\bmIoU\b|outperform|improv(e|es|ed|ement)|better than|state[- ]of[- ]the[- ]art", mp, re.I):
         fails.append("method_prose: no numbers, no results, no comparatives — it is written before the run and reused verbatim")
-    if re.search(r"(^|[\s;&|])(pip|git|curl|wget|conda|apt(-get)?)\s", cmd) or re.search(r"(^|[\s=:'\"])/(home|root|mnt|data)/", cmd):
-        fails.append("kill_cmd: no package installs, no git, no downloads, no absolute paths outside the worktree (what runs must be what was reviewed)")
+    if re.search(r"(^|[\s;&|])(pip|git|curl|wget|conda|apt(-get)?)\s", cmd):
+        fails.append("kill_cmd: no package installs, no git, no downloads (what runs must be what was reviewed)")
+    outside = [p for p in re.findall(r"(?:^|[\s=:'\"])((?:/(?:home|root|mnt|data))/[^\s;'\"&|]*)", cmd)
+               if not any(p == a or p.startswith(a + "/") for a in (allowed_abs or []))]
+    if outside:
+        fails.append(f"kill_cmd: absolute paths outside the substrate: {outside[:3]} (only substrate.json paths are runnable; what runs must be what was reviewed)")
     return fails
 
 
@@ -560,7 +590,7 @@ def gate_spec(qid: str, rdir: Path = HERE) -> int:
     except json.JSONDecodeError as e:
         spec, fails = {}, [f"spec is not JSON: {e}"]
     else:
-        fails = check_spec(spec, claim, repo, cap)
+        fails = check_spec(spec, claim, repo, cap, allowed_abs=substrate_paths(rdir))
         args = json.loads((rdir / "bundles" / f"args-spec-{qid}.json").read_text()) if (rdir / "bundles" / f"args-spec-{qid}.json").exists() else {}
         mode = str(args.get("mode") or ("support" if args.get("rung") else "mechanism"))
         src = str(spec.get("source") or "")
@@ -594,42 +624,33 @@ def gate_spec(qid: str, rdir: Path = HERE) -> int:
 
 # ── monitor gate (quotes must exist in the diff; every step covered) ───────
 
+HIGH_SEV = re.compile(r"^(P1|critical|high)$", re.I)
+
+
+def diff_files(diff: str) -> set[str]:
+    return set(re.findall(r"^diff --git a/(\S+) b/", diff, re.M))
+
+
 def check_monitor(out: dict, diff: str, steps: list[dict], truncated: bool) -> tuple[bool, list[str]]:
+    """One external lens (the Grok plugin) plus script facts. Fail-closed: no lens, no launch. Coverage is deterministic:
+    every spec step's file must appear in the diff (intent-to-add puts new files there); the lens is asked to flag a step
+    with no implementing change as `high`. Only critical/high findings block; medium/low travel to the builder's fix bundle."""
     reasons = []
-    lines = {l.strip() for l in diff.splitlines() if l.strip()}
-
-    def quoted(qs: list) -> list[str]:
-        return [q for q in (qs or []) if str(q).strip() and str(q).strip() not in lines]
-
-    grok = out.get("grok") or out
-    cov = {str(c.get("step_id")): c for c in (grok.get("coverage") or []) if isinstance(c, dict)}
+    ext = out.get("external") or {}
+    if not ext.get("available"):
+        reasons.append("external review unavailable: no lens read the diff (fail-closed; a null lens is an infrastructure failure, not a rejection)")
+    for f in ext.get("findings") or []:
+        if HIGH_SEV.match(str(f.get("severity", ""))):
+            reasons.append(f"review {f.get('severity')}: {f.get('file')}:{f.get('line')} {str(f.get('text', ''))[:160]}")
+    files = diff_files(diff)
     for st in steps:
-        sid = str(st.get("id"))
-        c = cov.get(sid)
-        if not c:
-            reasons.append(f"step {sid}: no coverage entry"); continue
-        if c.get("status") != "implemented":
-            reasons.append(f"step {sid}: {c.get('status')}")
-        bad = quoted(c.get("diff_lines"))
-        if bad:
-            reasons.append(f"step {sid}: quoted lines not in the diff: {bad[:2]}")
-        if not (c.get("diff_lines") or []):
-            reasons.append(f"step {sid}: no diff lines quoted (cannot quote = did not read)")
-    for f in grok.get("findings") or []:
-        bad = quoted(f.get("diff_lines"))
-        if bad:
-            reasons.append(f"finding {f.get('kind')}: quoted lines not in the diff: {bad[:2]} (finding discarded)")
-            continue
-        reasons.append(f"finding {f.get('kind')}: {str(f.get('text', ''))[:160]}")
+        fpath = str(st.get("file") or "").strip()
+        if fpath and fpath not in files:
+            reasons.append(f"step {st.get('id')}: file {fpath} is not in the diff (intent-to-add included) — the step has no implementing change")
+    if not files:
+        reasons.append("the diff is empty: nothing was implemented")
     if truncated:
         reasons.append("diff was truncated in the bundle: never approve what was not fully read")
-    if not grok.get("approved"):
-        reasons.append("monitor lens did not approve")
-    codex = out.get("codex") or {}
-    if codex.get("available"):
-        for f in codex.get("findings") or []:
-            if re.match(r"^(P1|critical|high)$", str(f.get("severity", "")), re.I):
-                reasons.append(f"codex {f.get('severity')}: {f.get('file')}:{f.get('line')} {str(f.get('text', ''))[:120]}")
     return (len(reasons) == 0), reasons
 
 
@@ -653,15 +674,16 @@ def gate_monitor(qid: str, out_path: Path, rdir: Path = HERE) -> int:
         approved = False; reasons.append("the diff touches a gitlink (nested repo): code inside it is invisible to review — track the model code as files on research-trunk (owner) or do not edit it")
     if re.search(r"^new mode 120000|^new file mode 120000|typechange", diff, re.M):
         approved = False; reasons.append("the diff adds a symlink: what runs would live outside the reviewed tree")
-    codex_raw = str(((out.get("codex") or {}).get("raw")) or "")
-    if codex_raw and re.search(r"\b(P1|critical)\b", codex_raw, re.I) and not any(re.match(r"^(P1|critical|high)$", str(f.get("severity", "")), re.I) for f in ((out.get("codex") or {}).get("findings") or [])):
-        approved = False; reasons.append("codex raw output mentions P1/critical but the forwarded findings carry none: the forwarder dropped or down-labelled a finding")
+    ext = out.get("external") or {}
+    raw = str(ext.get("raw") or "")
+    if raw and re.search(r"\"severity\":\s*\"(critical|high)\"|\b(P1|critical)\b", raw, re.I) and not any(HIGH_SEV.match(str(f.get("severity", ""))) for f in (ext.get("findings") or [])):
+        approved = False; reasons.append("the review's raw output carries a critical/high finding that the forwarded findings do not: the forwarder dropped or down-labelled it")
     ee = str((_claim_block() or {}).get("eval_entry") or "").strip()
     if ee and re.search(r"^diff --git a/" + re.escape(ee) + r"\b", diff, re.M):
         approved = False; reasons.append(f"the diff modifies the shared eval entrypoint {ee} (CLAIM eval_entry): the scoring protocol is not a candidate's to change")
     (rdir / "monitor").mkdir(exist_ok=True)
     (rdir / "monitor" / f"{qid}.json").write_text(json.dumps({"qid": qid, "approved": approved, "diff_sha": sha, "reasons": reasons,
-                                                              "findings": (out.get("grok") or out).get("findings", []), "codex": out.get("codex"),
+                                                              "findings": (out.get("external") or {}).get("findings", []), "external": out.get("external"),
                                                               "t": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=1, ensure_ascii=False))
     print(("APPROVED" if approved else "REJECTED") + ("\n" + "\n".join(reasons) if reasons else ""))
     return 0 if approved else 1

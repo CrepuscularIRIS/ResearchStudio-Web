@@ -38,7 +38,7 @@ NEVER = lambda run: False
 
 def ws(tmp_path: Path) -> tuple[Path, Path]:
     w = tmp_path; r = w / ".research"
-    for d in ("cards", "records", "bundles", "tokens", "gates", "build", "monitor"):
+    for d in ("cards", "records", "bundles", "tokens", "gates", "build", "monitor", "critique"):
         (r / d).mkdir(parents=True)
     (w / "repo").mkdir()
     (w / "GOAL.md").write_text(GOAL)
@@ -53,6 +53,7 @@ def write_map(r: Path, sha: str, sources=None):
         {"id": "S1", "mechanism": "M1", "domain": "robust statistics", "name": "contamination-aware aggregation", "status": "open", "best": None, "no_improve": 0, "tried": []},
         {"id": "S2", "mechanism": "M1", "domain": "sensor fusion", "name": "reliability weighting", "status": "open", "best": None, "no_improve": 0, "tried": []},
         {"id": "S3", "mechanism": "M2", "domain": "x", "name": "y", "status": "dropped", "drop_reason": "no procedure steps", "best": None, "no_improve": 0, "tried": []}]
+    srcs = [{**s, "critique": s.get("critique", {"decision": "keep", "rank_mean": 1.0, "contested": False, "panel": {}})} for s in srcs]   # Slot 1 already ran unless a test says otherwise
     (r / "mechanism-map.json").write_text(json.dumps({"claim_sha": sha, "failure_modes": [], "mechanisms": [], "sources": srcs}))
 
 
@@ -290,7 +291,10 @@ def test_spec_bundle_modes_and_card(tmp_path, monkeypatch):
     goal = {"campaign": {"gpu_h_ceiling": 200, "caps": {"oracle_frac": 0.05, "single_run_frac": 0.25, "reserve_frac": 0.2}, "kill_cap_gpu_h": 4}}
     assert gate.check_card(c, goal, r) == []
     b = bundle.cmd_build("Q-0001-alpha")
-    assert b["qid"] == "Q-0001-alpha" and "scripts/eval.py" in b["prompt"] and "git -C /tmp/wt-Q-0001-alpha diff research-trunk" in b["monitor_prompt"] and "codex-companion" in b["codex_prompt"]
+    assert b["qid"] == "Q-0001-alpha" and "scripts/eval.py" in b["prompt"] and "monitor_prompt" not in b and "codex_prompt" not in b
+    assert "grok-companion" in b["review_prompt"] and "--prompt-file" in b["review_prompt"] and "--scope working-tree --json --cwd /tmp/wt-Q-0001-alpha" in b["review_prompt"]
+    focus = (r / "bundles" / "review-focus-Q-0001-alpha.txt").read_text()
+    assert '"id": "s1"' in focus and "held_out" in focus, "the review focus carries the frozen spec steps"
     assert '"smoke"' not in b["prompt"].split("## 返回的 JSON")[1]
 
 
