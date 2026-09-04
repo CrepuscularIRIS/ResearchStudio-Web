@@ -3,7 +3,8 @@ import re, shutil, subprocess
 from pathlib import Path
 
 WF = Path(__file__).resolve().parents[1] / "workflows"
-EXPECTED = {"frame": "scientist", "mechanism": "scientist", "spec": "scientist", "build": "builder", "write": "writer", "pivot": "explorer", "critique": "critic-k3"}
+EXPECTED = {"frame": "scientist", "mechanism": "scientist", "spec": "scientist", "build": "builder", "write": "writer", "pivot": "explorer", "critique": "critic-k3",
+            "read": "critic-k3", "trial": "critic-sol", "draft": "writer"}
 
 
 def test_workflow_files_present_and_wellformed():
@@ -14,7 +15,7 @@ def test_workflow_files_present_and_wellformed():
         assert re.search(r"^export const meta = \{", s, re.M), f"{name}: meta must be a top-level literal"
         assert f"name: '{name}'" in s
         assert "typeof args === 'string' ? JSON.parse(args) : args" in s, f"{name}: args must be parsed defensively (harness passes a JSON string)"
-        assert f"agentType: '{lane}'" in s or (name == "critique" and f"'{lane}'" in s), f"{name}: must dispatch through the {lane} lane"
+        assert f"agentType: '{lane}'" in s or (name in ("critique", "read", "trial") and f"'{lane}'" in s), f"{name}: must dispatch through the {lane} lane"
         if name == "build":
             assert "agentType: 'reviewer'" in s and "agentType: 'monitor'" not in s, "build carries ONE external lens (the Grok plugin via the reviewer forwarder); the GLM monitor lane was retired 2026-09-04"
             assert "agentType: 'researcher'" not in s, "the diff monitor left the Grok researcher lane on 2026-09-03"
@@ -24,7 +25,7 @@ def test_workflow_files_present_and_wellformed():
             assert "agentType: 'explorer'" in s and "agentType: 'searcher'" in s and "agentType: 'reader'" in s and "agentType: 'verifier'" in s, "mechanism: Opus abstracts, K3 diverges, GLM searches and reverse-engineers, sol verifies"
             assert "agentType: 'researcher'" not in s, "the Grok lane left retrieval on 2026-09-04 (GLM waves)"
             assert "--start-year" in s and "--max-papers" in s, "the retrieval command uses search_papers.py's real flags"
-        if name in ("spec", "build", "mechanism", "write"):
+        if name in ("spec", "build", "mechanism", "write", "read", "trial", "draft"):
             assert "stallMs" in s, f"{name}: every long agent call carries a stall watchdog"
         assert "Structured output only" in s
         assert "require(" not in s and "import " not in s, f"{name}: no filesystem or imports inside the sandbox"

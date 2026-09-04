@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""step.py — the five Main actions of one iteration, each idempotent (WORKFLOW.md §4). stage.py tells Main which one to run.
+"""step.py — Main's actions, each idempotent; stage.py prints which one to run. Every action either prints ONE Workflow line
+(with its args file and where to save the result) or consumes a saved result (`--finish`) through the script gates.
 
-  mechanism                 → prints the Workflow(mechanism) line (args written to bundles/args-mechanism.json)
-  mechanism --finish <out>  → verifies quotes, writes mechanism-map.json
-  propose <chain>           → prints the Workflow(spec) line (args written to bundles/args-spec-<Q>.json)
-  propose --finish <Q>      → gate.py spec → bundle.py card → gate.py card → gate.py freeze → git worktree add   (retry / queue on failure)
-  build <Q> [--fix]         → prints the Workflow(build) line (builder → Grok ∥ Codex inside one workflow)
-  build --finish <Q> <out>  → saves build/<Q>.json, verifies the monitor's quotes against the real diff → token → launcher
-  record <Q>                → (cp confirm seeds) render_record → gate.py record → notebook + map → launches the confirm seeds on a band hit
+  claim loop
+  mechanism [--finish <out>]            stage M workflow (Opus B→M · K3 C · GLM search/reverse · sol verify) → mechanism-map.json
+  critique sources | spec <Q> [--finish] three-family panel (Slot 1 over map sources, Slot 2 over one gated spec) → map / critique/<Q>.json
+  propose <chain> [--rung R] [--retry]  spec workflow (Opus); --finish <Q>: gate.py spec → panel verdict → card → freeze → worktree
+  build <Q> [--fix]                     build workflow (GLM builder → Grok plugin review); --finish <Q> <out>: gate.py monitor → token → launcher
+  record <Q>                            render_record → gate.py record → notebook + map; confirm seeds on a band hit
+  pivot --finish <out>                  saves the explorer's verdict (owner picks the exit; `stage.py ship` is exit (a))
+  outer manuscript loop (outer.py)
+  write [--merge | --review]            W0 merge · sections from records + fact review · review only; --finish <out>: review → ledger rows
+  read | trial | draft <n> [--finish <n> <out>]   referees → ledger · trials → verdicts · patches → applied, journaled, gated
 """
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys, time
@@ -43,7 +47,7 @@ def mechanism(finish: str | None) -> int:
     if r.returncode:
         say(r.stderr.strip()); return 1
     (HERE / "bundles" / "args-mechanism.json").write_text(r.stdout)
-    say("Workflow(name='mechanism', args=<contents of .research/bundles/args-mechanism.json>)   # Fable (B,M) → K3 (C) → Grok (recipe, precedent)",
+    say("Workflow(name='mechanism', args=<contents of .research/bundles/args-mechanism.json>)   # scientist (B,M) → explorer (C) → searcher/reader (GLM) → verifier (sol)",
         "save the returned JSON to .research/bundles/mechanism-out.json, then: python3 .research/step.py mechanism --finish .research/bundles/mechanism-out.json")
     return 0
 
@@ -59,7 +63,7 @@ def propose(chain: str, retry: bool = False, rung: str | None = None) -> int:
     if retry:                                                      # the revised spec must pass the gate and the panel again
         for p in (HERE / "gates" / f"{d['qid']}.spec.ok", HERE / "critique" / f"{d['qid']}.json", HERE / "bundles" / f"critique-out-{d['qid']}.json"):
             p.unlink(missing_ok=True)
-    say(f"Workflow(name='spec', args=<contents of .research/bundles/args-spec-{d['qid']}.json>)   # scientist (Fable) writes {d['spec_path']}",
+    say(f"Workflow(name='spec', args=<contents of .research/bundles/args-spec-{d['qid']}.json>)   # scientist (Opus) writes {d['spec_path']}",
         f"then: python3 .research/step.py propose --finish {d['qid']}")
     return 0
 
@@ -70,7 +74,7 @@ def propose_finish(qid: str, out_path: str | None = None) -> int:
     if not spec_p.exists() and out_path and Path(out_path).exists():
         out = stage._json(Path(out_path))
         if isinstance(out.get("spec"), dict) and out["spec"]:
-            spec_p.write_text(json.dumps(out["spec"], indent=1, ensure_ascii=False))     # the returned object is authoritative; Fable's Write is a convenience
+            spec_p.write_text(json.dumps(out["spec"], indent=1, ensure_ascii=False))     # the returned object is authoritative; the scientist's Write is a convenience
     if not spec_p.exists():
         say(f"no spec at {spec_p}: the scientist wrote nothing → python3 .research/bundle.py queue {qid} \"spec workflow returned nothing (infrastructure)\""); return 1
     if not (HERE / "gates" / f"{qid}.spec.ok").exists():
@@ -80,7 +84,7 @@ def propose_finish(qid: str, out_path: str | None = None) -> int:
             if retries.exists():
                 say("spec gate failed twice:", r.stdout.strip(), f"→ python3 .research/bundle.py queue {qid} \"spec failed the gate twice\"")
                 return 1
-            say("spec gate failed:", r.stdout.strip(), f"→ python3 .research/step.py propose {chain} --retry   # Fable gets the failure list once")
+            say("spec gate failed:", r.stdout.strip(), f"→ python3 .research/step.py propose {chain} --retry   # the scientist gets the failure list once")
             return 1
     mode = stage._json(HERE / "bundles" / f"args-spec-{qid}.json").get("mode", "mechanism")
     crit = stage._json(HERE / "critique" / f"{qid}.json")
@@ -185,7 +189,7 @@ def build(qid: str, fix: bool = False) -> int:
     if r.returncode:
         say(r.stderr.strip()); return 1
     (HERE / "bundles" / f"args-build-{qid}.json").write_text(r.stdout)
-    say(f"Workflow(name='build', args=<contents of .research/bundles/args-build-{qid}.json>)   # builder (GLM) → monitor (GLM) ∥ Codex",
+    say(f"Workflow(name='build', args=<contents of .research/bundles/args-build-{qid}.json>)   # builder (GLM) → Grok plugin review",
         f"save the returned JSON to .research/bundles/build-out-{qid}.json, then: python3 .research/step.py build --finish {qid} .research/bundles/build-out-{qid}.json")
     return 0
 
@@ -301,17 +305,63 @@ def record(qid: str, gpu: int | None = None) -> int:
     return 0 if gate_ok else 1
 
 
+def write_start(mode: str) -> int:
+    r = py(str(HERE / "bundle.py"), "write", *(["--merge"] if mode == "merge" else ["--review"] if mode == "review" else []))
+    if r.returncode:
+        say(r.stderr.strip()); return 1
+    (HERE / "bundles" / "args-write.json").write_text(r.stdout)
+    say(f"Workflow(name='write', args=<contents of .research/bundles/args-write.json>)   # mode {mode}; save the returned JSON to .research/bundles/write-out.json",
+        "then: python3 .research/step.py write --finish .research/bundles/write-out.json")
+    return 0
+
+
 def write_finish(out_path: str) -> int:
+    import outer, paper_ledger as L  # noqa: E402
     out = stage._json(Path(out_path))
-    rev = out.get("review") if isinstance(out.get("review"), dict) else None
+    mode = out.get("mode") or stage._json(HERE / "bundles" / "args-write.json").get("mode") or "sections"
     (HERE / "gates").mkdir(exist_ok=True)
+    if mode == "merge":
+        main = outer.paper_dir(W) / "main.tex"
+        if not main.exists():
+            say(f"merge: {main} was not written (infrastructure or NEEDS_CONTEXT): re-run python3 .research/step.py write --merge"); return 1
+        say(f"merged manuscript at {main}", "next: python3 .research/stage.py"); return 0
+    rev = out.get("review") if isinstance(out.get("review"), dict) else None
     if not rev or rev.get("verdict") not in ("pass", "block"):
         (HERE / "gates" / "write-review.json").unlink(missing_ok=True)
         say("write workflow returned no review verdict (infrastructure failure, not a pass): re-run Workflow(write)"); return 1
-    rev = {**rev, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "written": out.get("written")}
+    rev = {**rev, "t": time.strftime("%Y-%m-%dT%H:%M:%S"), "written": out.get("written"), "mode": mode}
     (HERE / "gates" / "write-review.json").write_text(json.dumps(rev, indent=1, ensure_ascii=False))
-    say(f"final review: {rev['verdict']}" + ("" if rev["verdict"] == "pass" else " — " + "; ".join(str(x) for x in (rev.get("issues") or [])[:5])), "next: python3 .research/stage.py")
+    led = L.load(HERE)
+    rd = L.current_round(led) or L.start_round(led, 0)
+    L.save(led, HERE)
+    k = outer.intake_review(HERE, rd["n"], rev)
+    say(f"fact review: {rev['verdict']}" + ("" if rev["verdict"] == "pass" else " — " + "; ".join(str(x) for x in (rev.get("issues") or [])[:5])),
+        f"ledger: {L.summary(L.load(HERE))}" + (f" · {k} review issues became valid-fixable rows" if k else ""), "next: python3 .research/stage.py")
     return 0 if rev["verdict"] == "pass" else 1
+
+
+def outer_start(kind: str, rnd: int) -> int:
+    import outer  # noqa: E402
+    d = outer.cmd_read(W, rnd) if kind == "read" else outer.cmd_trial(W, HERE, rnd) if kind == "trial" else outer.cmd_draft(W, HERE, rnd)
+    p = HERE / "bundles" / f"args-{kind}.json"
+    p.write_text(json.dumps(d, indent=1, ensure_ascii=False))
+    out = HERE / "bundles" / f"{kind}-out-{rnd}.json"
+    say(f"Workflow(name='{kind}', args=<contents of {p}>)   # save the returned JSON to {out}", f"then: python3 .research/step.py {kind} --finish {rnd} {out}")
+    return 0
+
+
+def outer_finish(kind: str, rnd: int, out_path: str) -> int:
+    import outer  # noqa: E402
+    out = stage._json(Path(out_path))
+    if not out:
+        say(f"{kind} round {rnd}: the workflow returned nothing (infrastructure, not a verdict) → python3 .research/step.py {kind} {rnd}"); return 1
+    res = outer.finish_read(W, HERE, rnd, out) if kind == "read" else outer.finish_trial(HERE, rnd, out) if kind == "trial" else outer.finish_draft(W, HERE, rnd, out)
+    if res.get("error"):
+        Path(out_path).rename(Path(out_path).with_suffix(".null.json"))
+        say(f"{kind} round {rnd}: {res['error']} (infrastructure) → python3 .research/step.py {kind} {rnd}"); return 1
+    import paper_ledger as L  # noqa: E402
+    say(f"{kind} round {rnd}: {res}", f"ledger: {L.summary(L.load(HERE))}", "next: python3 .research/stage.py")
+    return 0
 
 
 def pivot_finish(out_path: str) -> int:
@@ -332,7 +382,9 @@ def main() -> int:
     p = sub.add_parser("propose"); p.add_argument("chain", nargs="?"); p.add_argument("--finish"); p.add_argument("out", nargs="?"); p.add_argument("--retry", action="store_true"); p.add_argument("--rung")
     p = sub.add_parser("critique", help="critique sources | critique spec <Q> | critique --finish sources <out> | critique --finish spec <Q> <out>")
     p.add_argument("kind", choices=["sources", "spec"]); p.add_argument("rest", nargs="*"); p.add_argument("--finish", action="store_true")
-    p = sub.add_parser("write"); p.add_argument("--finish", required=True)
+    p = sub.add_parser("write"); p.add_argument("--finish"); p.add_argument("--merge", action="store_true"); p.add_argument("--review", action="store_true")
+    for name in ("read", "trial", "draft"):
+        p = sub.add_parser(name, help=f"outer loop: {name} <round> | {name} --finish <round> <out>"); p.add_argument("round", type=int); p.add_argument("out", nargs="?"); p.add_argument("--finish", action="store_true")
     p = sub.add_parser("pivot"); p.add_argument("--finish", required=True)
     p = sub.add_parser("status"); p.add_argument("qid")
     p = sub.add_parser("build"); p.add_argument("qid"); p.add_argument("--finish"); p.add_argument("--fix", action="store_true"); p.add_argument("--gpu", type=int)
@@ -354,7 +406,11 @@ def main() -> int:
             say("usage: critique sources | critique spec <Q> | critique --finish sources <out> | critique --finish spec <Q> <out>"); return 2
         return critique_finish(a.kind, qid, out) if a.finish else critique(a.kind, qid)
     if a.cmd == "write":
-        return write_finish(a.finish)
+        return write_finish(a.finish) if a.finish else write_start("merge" if a.merge else "review" if a.review else "sections")
+    if a.cmd in ("read", "trial", "draft"):
+        if a.finish and not a.out:
+            say(f"usage: {a.cmd} --finish <round> <out>"); return 2
+        return outer_finish(a.cmd, a.round, a.out) if a.finish else outer_start(a.cmd, a.round)
     if a.cmd == "pivot":
         return pivot_finish(a.finish)
     if a.cmd == "status":

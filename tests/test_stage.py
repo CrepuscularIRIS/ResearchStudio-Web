@@ -45,7 +45,23 @@ def ws(tmp_path: Path) -> tuple[Path, Path]:
     (w / "CLAIM.md").write_text(CLAIM)
     (r / "CLAIM.sha").write_text(stage.claim_sha(w))
     write_map(r, stage.claim_sha(w))
+    manuscript(w)
     return w, r
+
+
+def manuscript(w: Path) -> None:
+    """A two-section manuscript under GOAL paper_dir (paper/pr) so the outer loop has something to read; no digits (numbers gate)."""
+    d = w / "paper" / "pr" / "sections"; d.mkdir(parents=True, exist_ok=True)
+    (w / "paper" / "pr" / "main.tex").write_text("\\documentclass{article}\\begin{document}\\input{sections/05_method}\\input{sections/06_experiments}\\end{document}\n")
+    (d / "05_method.tex").write_text("\\section{Method}\nWe scale the depth mask by a uniform factor before the attention operator.\n\nThe rest of the operator is unchanged; only the mask changes.\n")
+    (d / "06_experiments.tex").write_text("\\section{Experiments}\nOur method improves robustness across settings on every network.\n\nThe table reports the mean over three seeds with its confidence interval.\n")
+
+
+def clean_ledger(r: Path) -> None:
+    """A ledger whose last read round found nothing genuinely new and whose review passed: the clerk's stop condition."""
+    t = time.strftime("%Y-%m-%dT%H:%M:%S")
+    (r / "paper-ledger.json").write_text(json.dumps({"issues": [], "next_id": 1, "rounds": [{"n": 1, "t": t, "genuinely_new": 0, "read": {"t": t}, "trial": None, "draft": None, "review": {"t": t, "verdict": "pass"}}]}))
+    (r / "gates" / "write-review.json").write_text(json.dumps({"verdict": "pass", "issues": [], "t": t}))
 
 
 def write_map(r: Path, sha: str, sources=None):
@@ -217,11 +233,9 @@ def test_support_ladder_and_stage_D(tmp_path):
     record(r, wt, "Q-0003-alpha", 1.1, 0.1, n=3, ci=[0.5, 1.7])
     card(r, "Q-0004-alpha", "alpha", "NetA", wt, phase="support", rung="R3"); record(r, wt, "Q-0004-alpha", 0.9, 0.1)
     d = decide(w, r)
-    assert d["stage"] == "D" and "write --finish" in " ".join(d["next"]), "no review yet: write, then save the verdict"
-    (r / "gates" / "write-review.json").write_text(json.dumps({"verdict": "block", "issues": ["06_experiments.tex:12 — number without src"]}))
-    d = decide(w, r); assert d["stage"] == "D" and d["next"][0].startswith("human:") and "BLOCKED" in d["reason"], "a blocked review is consumed, not printed past"
-    (r / "gates" / "write-review.json").write_text(json.dumps({"verdict": "pass", "issues": []}))
-    d = decide(w, r); assert d["stage"] == "D" and "gate.py deliverables" in d["next"][0]
+    assert d["stage"] == "W" and d["next"][0] == "python3 .research/step.py write", "the claim loop is done: the outer loop starts with W0 (sections from records + fact review)"
+    clean_ledger(r)
+    d = decide(w, r); assert d["stage"] == "W" and "gate.py deliverables" in d["next"][0], "a clean read round with nothing genuinely new → deliverables"
     (r / "DONE").write_text("deliverables gate passed\n")
     assert decide(w, r)["stage"] == "DONE"
     assert stage.search_gpu_h(stage.records(r), claim) == 2.0, "support and baseline runs never count against the search budget"

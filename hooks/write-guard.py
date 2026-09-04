@@ -14,6 +14,7 @@ W = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parent
 GUARDED = ("CLAIM.md", "GOAL.md", ".research/records", ".research/ledger.jsonl", ".research/notebook.json", ".research/verdicts",
            ".research/CLAIM.sha", ".research/FROZEN.sha", ".research/tokens", ".research/monitor", ".research/gates", ".research/queue.json",
            ".research/mechanism-map.json", ".research/cards", ".research/build",
+           ".research/paper-ledger.json", ".research/paper-journal.jsonl", ".research/critique",
            "paper/neuro2col", "paper/icassp")
 OWNER_CMDS = re.compile(r"stage\.py\s+accept\b|gate\.py\s+frozen\s+--accept\b")
 WRITE_VERB = re.compile(r"((?<![0-9&])>>?(?!&)|\btee\b|\bcp\b|\bmv\b|\bsed\s+-i|\bperl\s+-i|\btruncate\b|\brm\b|\bln\b|open\([^)]*['\"][wa])")

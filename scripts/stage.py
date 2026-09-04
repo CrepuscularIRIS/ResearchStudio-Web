@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """stage.py — read the file state, print the stage and, per chain, exactly ONE `step.py` action. Main never decides.
 
-Stages: A frame · M mechanism map · R review (human) · C loop · P pivot · D write · STOP (identity mismatch).
+Stages: A frame · R review (human) · M mechanism map (+ Slot 1 panel) · C loop (+ Slot 2 panel) · P pivot · W the outer manuscript loop
+(outer.py: W0 → read → trial → draft → review → clerk → deliverables) · STOP (identity mismatch / infrastructure) · DONE.
 Inside C every chain is a sub-state machine over files, but Main only ever sees one of:
   step.py propose <chain> [--rung R] · step.py propose --finish <Q> · step.py build <Q> [--fix] · step.py build --finish <Q> <out>
   step.py record <Q> · (wait, with the run's progress) · bundle.py queue <Q> "<why>"
@@ -432,22 +433,14 @@ def ship_incumbent(w: Path, r: Path, by: str, why: str) -> tuple[bool, str]:
     return True, f"shipping the incumbent ({', '.join(ev['baseline_records'])}): stage D writes the negative result; delete .research/SHIP-INCUMBENT to reopen the search"
 
 
-def _stage_d(r: Path, head: str) -> dict:
-    """Stage D's sub-states: DONE marker → review verdict → the write workflow."""
+def _stage_d(w: Path, r: Path, head: str, done_records: list[str]) -> dict:
+    """The claim loop is finished for this claim text: hand over to the outer manuscript loop (outer.decide), which closes the
+    needs-data rows this claim answered and prints the round's next action (W0 merge / write → read → trial → draft → review →
+    clerk → deliverables → DONE)."""
     if (r / "DONE").exists():
         return {"stage": "DONE", "reason": (r / "DONE").read_text().strip() or "deliverables gate passed", "next": ["# nothing: the paper is built and gated"]}
-    review = _json(r / "gates" / "write-review.json")
-    if review.get("verdict") == "pass":
-        return {"stage": "D", "reason": head + "; final review passed",
-                "next": ["python3 .research/gate.py deliverables   # numbers on every section, review pass, main.pdf fresh → writes .research/DONE"]}
-    if review.get("verdict") == "block":
-        return {"stage": "D", "reason": head + "; final review BLOCKED",
-                "next": ["human: the final review blocked the manuscript — " + "; ".join(str(x) for x in (review.get("issues") or [])[:5]),
-                         "# after the fix: python3 .research/bundle.py write > .research/bundles/args-write.json → Workflow(name='write', ...) → step.py write --finish <out>"]}
-    return {"stage": "D", "reason": head,
-            "next": ["python3 .research/bundle.py write > .research/bundles/args-write.json",
-                     "Workflow(name='write', args=<contents of args-write.json>)   # writer (GLM) per section, polish (Fable), review (Grok)",
-                     "python3 .research/step.py write --finish .research/bundles/write-out.json   # saves the review verdict; stage D reads it"]}
+    import outer  # noqa: E402
+    return outer.decide(w, r, head, claim_sha(w), done_records)
 
 
 def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: list[int] | None = None, active=unit_active) -> dict:
@@ -458,7 +451,7 @@ def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: l
     claim = load_claim(w)
     if claim is None:
         return {"stage": "A", "reason": "no CLAIM.md", "next": ["python3 .research/bundle.py A > .research/bundles/args-frame.json",
-                 "Workflow(name='frame', args=<contents of args-frame.json>)   # scientist (Fable) writes CLAIM.md"]}
+                 "Workflow(name='frame', args=<contents of args-frame.json>)   # scientist (Opus) writes CLAIM.md"]}
     if "_error" in claim:
         return {"stage": "A", "reason": claim["_error"], "next": ["fix CLAIM.md's yaml block (bundle.py A prints the template)"]}
     if not accepted(w, r):
@@ -486,14 +479,16 @@ def decide(w: Path = W, r: Path | None = None, now: float | None = None, idle: l
     nets_hit = networks_hit(recs, claim)
     ship = _json(r / "SHIP-INCUMBENT")
     if ship and ship.get("claim_sha") == claim_sha(w) and not ladder["kept"]:        # exit (a), recorded by `stage.py ship`
-        return _stage_d(r, f"exit (a): incumbent shipped by {ship.get('by')} — {ship.get('why')}; main table = baseline records, every candidate a negative result")
+        return _stage_d(w, r, f"exit (a): incumbent shipped by {ship.get('by')} — {ship.get('why')}; main table = baseline records, every candidate a negative result",
+                        list(ship.get("baseline_records") or []))
     if ladder_complete and len(nets_hit) < need_nets:
         return {"stage": "P", "reason": f"support ladder complete but only {len(nets_hit)}/{need_nets} networks reach the band ({sorted(nets_hit)}): the claim as written is not supported",
                 "next": ["python3 .research/bundle.py pivot > .research/bundles/args-pivot.json",
                          "Workflow(name='pivot', args=<contents of args-pivot.json>)   # explorer (K3) once",
                          "human: exit (a) ship the incumbent with the negative generalisation result, (b) edit CLAIM.md (keep_networks / networks) and re-accept"]}
     if ladder_complete:
-        return _stage_d(r, f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)")
+        done = sorted({x["run"] for x in keep_records(recs, claim)} | {x["run"] for x in recs if x["_phase"] == "support" and valid(x, claim)})
+        return _stage_d(w, r, f"KEEP {ladder['kept']}, {len(nets_hit)}/{need_nets} networks in band, support ladder complete ({len(ladder['rungs'])} rungs)", done)
     qs = _json_list(r / "queue.json")[-3:]
     infra_rx = re.compile(r"returned nothing|infrastructure|stalled twice|exit 5", re.I)
     if len(qs) == 3 and all(infra_rx.search(str(e.get("text", ""))) for e in qs):
@@ -586,7 +581,12 @@ def main() -> int:
             fh.write(json.dumps({"event": "accept", "sha": claim_sha(W), "prev_sha": old_sha, "keep_gain": kg, "seeds_for_keep": n, "seed_sd": sd,
                                  "keep_networks": c.get("keep_networks"), "by": a.by or os.environ.get("USER", "owner"), "why": a.why or "",
                                  "t": time.strftime("%Y-%m-%dT%H:%M:%S")}) + "\n")
-        (HERE / "CLAIM.sha").write_text(claim_sha(W) + "\n"); print("accepted", claim_sha(W)[:12]); return 0
+        (HERE / "CLAIM.sha").write_text(claim_sha(W) + "\n"); print("accepted", claim_sha(W)[:12])
+        import paper_ledger as L  # noqa: E402
+        led = L.load(HERE); bound = L.bind_needs_data(led, claim_sha(W))
+        if bound:
+            L.save(led, HERE); print(f"needs-data rows bound to this claim: {bound} (they close when the claim loop finishes)")
+        return 0
     if a.cmd == "ship":
         ok, msg = ship_incumbent(W, HERE, a.by or os.environ.get("USER", "owner"), a.why)
         print(msg); return 0 if ok else 1

@@ -1,7 +1,7 @@
 ---
 name: researcher
-description: Grok 4.6 — the fact lane. REVIEW: one artifact-aware pass over the finished manuscript (recompute every number from the seed files, check every `% src:`, negative-results completeness, method text vs the frozen method_prose; register issues as `style:`). SEARCH/EXTRACT moved to the GLM searcher/reader lanes on 2026-09-04; the external diff review is the Grok plugin via `reviewer`. Never designs, never ranks candidates.
-model: grok-4.6
+description: GPT 5.6 sol (was Grok 4.6 until 2026-09-04, when grok-4.6 left the Claude-native workflow) — the fact lane. REVIEW: one artifact-aware pass over the finished manuscript (recompute every number from the seed files, check every `% src:`, negative-results completeness, method text vs the frozen method_prose; register issues as `style:`). SEARCH/EXTRACT moved to the GLM searcher/reader lanes on 2026-09-04; the external diff review is the Grok plugin via `reviewer`. Never designs, never ranks candidates.
+model: gpt-5.6-sol
 tools: Bash, Read, Grep, Glob
 maxTurns: 40
 ---

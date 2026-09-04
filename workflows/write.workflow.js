@@ -22,5 +22,5 @@ if (A.review_prompt) review = await agent(A.review_prompt + '\n\nStructured outp
   agentType: 'researcher', label: 'review', phase: 'Review', stallMs: 600000,
   schema: { type: 'object', required: ['verdict', 'issues'], properties: { verdict: { enum: ['pass', 'block'] }, issues: { type: 'array', items: { type: 'string' } } } },
 })
-if (!review) log('review returned nothing — treat as block (fail-closed)')
-return { written, review: review || { verdict: 'block', issues: ['reviewer returned nothing'] } }
+if (A.review_prompt && !review) log('review returned nothing — infrastructure (step.py write --finish retries), not a verdict')
+return { mode: A.mode || 'sections', written, review: review || null }
