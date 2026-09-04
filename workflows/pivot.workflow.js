@@ -9,6 +9,7 @@ const A = (typeof args === 'string' ? JSON.parse(args) : args) || {}
 const r = await agent(A.prompt + '\n\nStructured output only.', {
   agentType: 'explorer', label: 'pivot', phase: 'Pivot', stallMs: 900000,
   schema: { type: 'object', required: ['verdict', 'reasons', 'associations'],
-    properties: { verdict: { enum: ['ship_incumbent', 'revise_claim', 'new_sources'] }, reasons: { type: 'array', items: { type: 'string' } }, associations: { type: 'array', items: { type: 'string' } } } },
+    properties: { verdict: { enum: ['ship_incumbent', 'revise_claim', 'new_sources'] }, reasons: { type: 'array', items: { type: 'string' } }, associations: { type: 'array', items: { type: 'string' } },
+      plateau_pair: { type: 'string' }, questions_raised: { type: 'array', items: { type: 'string' } }, obstacle_directives: { type: 'array', items: { type: 'string' } } } },
 })
 return r || { verdict: null, reasons: [], associations: [], error: 'explorer returned nothing (infrastructure failure, not a verdict): re-run Workflow(pivot)' }

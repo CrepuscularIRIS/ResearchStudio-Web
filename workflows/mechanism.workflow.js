@@ -44,7 +44,8 @@ const FM = {
 const SOURCES = {
   type: 'object', required: ['sources'],
   properties: { sources: { type: 'array', items: { type: 'object', required: ['mechanism', 'domain', 'name', 'isomorphism', 'disanalogy', 'query'],
-    properties: { mechanism: { type: 'string' }, domain: { type: 'string' }, name: { type: 'string' }, isomorphism: { type: 'string' }, disanalogy: { type: 'string' }, query: { type: 'string' }, naive_in_A: { type: 'string' }, pattern: { type: 'string' } } } } },
+    properties: { mechanism: { type: 'string' }, domain: { type: 'string' }, name: { type: 'string' }, isomorphism: { type: 'string' }, disanalogy: { type: 'string' }, query: { type: 'string' }, naive_in_A: { type: 'string' }, pattern: { type: 'string' },
+      alias_terms: { type: 'array', items: { type: 'string' } }, borrowed: { enum: ['method', 'way_of_thinking'] }, chain_object: { type: 'string' } } } } },
 }
 const PAPER = { type: 'object', required: ['id', 'title', 'text_path'], properties: { id: { type: 'string' }, title: { type: 'string' }, year: { type: 'number' }, text_path: { type: 'string' }, why: { type: 'string' } } }
 const SEARCH = { type: 'object', required: ['papers', 'precedent_candidates'], properties: { papers: { type: 'array', items: PAPER }, precedent_candidates: { type: 'array', items: PAPER }, notes: { type: 'string' } } }
@@ -56,6 +57,7 @@ const GENE = {
     steps: { type: 'array', maxItems: 4, items: QUOTED },
     key_number: { type: 'object', required: ['value', 'quote', 'line'], properties: { value: { type: 'string' }, quote: { type: 'string' }, line: { type: 'number' } } },
     avoid: QUOTED, disanalogy_to_A: { type: 'string' }, code_url: { type: 'string' }, relation_to_claim: { type: 'string' }, scooped: { type: 'boolean' },
+    untested: { type: 'array', items: { type: 'string' } }, naive_baseline: { type: 'string' }, novel_part: { type: 'string' },
   },
 }
 const PRECEDENT = { type: 'object', required: ['found', 'quote', 'line', 'why'], properties: { found: { type: 'boolean' }, quote: { type: 'string' }, line: { type: 'number' }, why: { type: 'string' } } }
@@ -80,13 +82,17 @@ const divergePrompt = [
   'Divergence vocabulary (use as lenses, not as a checklist): assumption_audit_and_pivot · architectural_operator_substitution · reframe_as_solvable_object · unify_into_shared_representation · structural_prior_encoding · algebraic_equivalence · heterogeneous_decomposition · decompose_and_delegate · relax_discrete_to_continuous · adapt_via_conditioning · characterize_limit_then_surpass · controlled_diagnostic_design.',
   'Structure, not vocabulary: a C that only shares words with M (ARFT B.5) is not a source. For each C also say in one clause what the NAIVE version of the mechanism in A would be, so a later spec must beat it.',
   'Tag each C with the one lens (`pattern`) it mainly uses, and give at most two Cs per pattern per mechanism — six variants of one move are not six sources. Mature, textbook mechanisms (pre-2015, other fields) are wanted; the query must be answerable in C\'s own literature.',
+  'Enumerate candidates by the residual the mechanism must close, not by its surface verb: a source from a different mechanism family that closes the same residual through a different move must not be excluded because M was phrased in one family\'s vocabulary. Two further lenses: INVERT (the field does A → B; could we do B → A?) and EXTREME (push one parameter of the mechanism to its limit).',
+  '`alias_terms` (2-4, 3-7 words each): how OTHER research communities would name this mechanism — a parametric-knowledge step, not a paraphrase: "if a reward-modeling / classical-CV / RL / NLP / theory group had built this same mechanism 2-3 years ago, what would their papers\' titles call it?" Do NOT reuse your own domain wording — the point is the words this community does NOT use.',
+  '`borrowed`: did A borrow a method from C, or only a way of thinking? A C that lends only a way of thinking has no recipe; mark it `way_of_thinking` (it will not become a source). If a C is a chain of two moves you must NAME the intermediate object O (`chain_object`: "A\'s move yields O; B\'s move on O yields the deliverable"); if you cannot name O, the chain is decorative — drop it.',
+  'To call a C "already done in A" you MUST name the concrete prior method (name + its move); a vague "feels done before" must never suppress a source.',
   ISOLATION,
 ].join('\n')
 const div = await agent(divergePrompt + '\n\nStructured output only.', { agentType: 'explorer', label: 'diverge', phase: 'Diverge', schema: SOURCES, stallMs: 900000 })
 if (!div) return { ...fm, sources: [], error: 'explorer returned nothing (infrastructure failure)' }
 const seen = new Set()
-const candidates = div.sources.filter((s) => { const k = (s.domain + '|' + s.name).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true })
-log(`C: ${candidates.length} source domains (${div.sources.length - candidates.length} duplicates dropped)`)
+const candidates = div.sources.filter((s) => { const k = (s.domain + '|' + s.name).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return s.borrowed !== 'way_of_thinking' })
+log(`C: ${candidates.length} source domains (${div.sources.length - candidates.length} duplicates or way-of-thinking-only dropped)`)
 
 // ── per-source waves ─────────────────────────────────────────────────────────
 const head = (s) => [`Claim under test (A): "${A.claim}"`, `Mechanism: ${s.mechanism}`, `Source domain C: ${s.domain} — ${s.name}`, `Isomorphism: ${s.isomorphism}`, `Disanalogy: ${s.disanalogy}`]
@@ -98,8 +104,10 @@ const searchPrompt = (s) => [
   `2. Text for each chosen paper: local library first — ls ${A.library} | grep -i for the id or title words; pdftotext -layout <pdf> ${A.papers_dir}/<id>.txt —`,
   `   else, for an arXiv id only, python3 ${A.fetch} --one <arxiv-id> (writes ${A.papers_dir}/<id>.txt and prints the row). A paper with no obtainable text gets text_path "" (it will be skipped).`,
   `3. Precedent search: python3 ${A.search} --query "${q(s.name)} ${q(A.a_terms.join(' '))}" --start-year 2012 --end-year 2026 --max-papers 8 --json`,
-  `   Keep up to ${P} precedent_candidates that could ALREADY apply this mechanism to A (${q(A.a_terms.join(', '))}); obtain their text the same way. None is a valid answer.`,
-  'Return the JSON only. `why` = one clause on why the paper is a procedure source. Never rank by taste; never read the texts yourself.',
+  ...((s.alias_terms || []).slice(0, 2).map((a, i) => `   ESCAPE-MECHANISM query ${i + 1} (a paper that already fixed this names itself by its SOLUTION, not by the problem; problem-keyed queries miss exactly the paper that scoops you): python3 ${A.search} --query "${q(a)} ${q(A.a_terms.join(' '))}" --start-year 2012 --end-year 2026 --max-papers 6 --json`)),
+  `   Keep up to ${P} precedent_candidates that could ALREADY apply this mechanism to A (${q(A.a_terms.join(', '))}); obtain their text the same way. None is a valid answer. Do NOT discount a hit for being 2-3 years old — a same-mechanism ancestor subsumes regardless of age.`,
+  'Selection is by the DECLARED fields first (relevance_score, is_survey=false, year, venue); among the top by score choose the procedure-grade ones by title/abstract — do not re-rank the pool by your own quality opinion. Phrase any extra query mechanism-first ("<topic> challenges/overview/landscape" phrasings are survey magnets); terms are 3-7-word noun phrases, no generic words.',
+  'Return the JSON only. `why` = one clause on why the paper is a procedure source. Never rank by taste; never read the texts yourself; never report a paper from memory without a retrieved record.',
   ISOLATION,
 ].join('\n')
 
@@ -110,6 +118,10 @@ const readerPrompt = (s, p, issues) => [
   'key_number = the single number that proves the mechanism works in C, with its verbatim quote and line (the mechanism\'s own evidence, not a baseline\'s); avoid = their own stated limitation or failure, quoted with line;',
   'disanalogy_to_A = which assumption behind the steps fails in A; code_url if stated; relation_to_claim = one line; scooped = true only if the paper tests the claim itself.',
   'A quote is copied character for character from the .txt; the script checks every line. No procedure in the paper → is_procedure=false, steps=[].',
+  'A summary is a failure; the card must say what the authors DO. Quote numbers from tables, not from the abstract. Limitations and scope boundaries live in method sections, not abstracts — read them.',
+  'disanalogy_to_A must be SUBSTANTIVE (a derivation, a construction, a regime extension, a measurement primitive, an architectural property), never a methodological label ("they used a different pattern" is a process error).',
+  'Optional: `untested` = the switch the paper should have run and did not; `naive_baseline` = why the obvious version of this mechanism does not already work (their own words if stated); `novel_part` = "The truly novel part of this paper is not ______, but ______."',
+  'scooped = true only for a paper that closes/settles/characterizes the claim itself; most papers EXECUTE a mechanism and add to its frontier — they do not resolve.',
   ...(issues && issues.length ? ['', '## The verifier returned this card; fix exactly these issues, change nothing else:', ...issues.map((x) => `- ${x}`)] : []),
   ISOLATION,
 ].join('\n')
@@ -126,6 +138,9 @@ const verifyPrompt = (s, g) => [
   `Text: ${g.text_path}   (Grep each quote; Read ±10 lines around each cited line; read nothing else)`, '', '## Card', JSON.stringify(g, null, 1), '',
   'Checks, one entry each in `checks` (item = "step 1", "key_number", "avoid", "procedure"): (1) every quote appears verbatim within ±3 lines of its line; (2) each step is a procedure — an operation on a defined object with its parameters — not a gist or a name;',
   '(3) key_number is the mechanism\'s own evidence (not a baseline, not another method); (4) avoid is a limitation the authors state. verdict: accept = all ok; return = fixable by re-reading (a wrong line, a vague step) — list the issues; drop = the paper does not give this mechanism as a procedure.',
+  'Existence vs support: a quote you find at its line proves only that the cited evidence EXISTS; whether it supports the step is check (2)/(3). Favour false-negative over false-positive: when in doubt a quote is not verified. A number is matched by numeric-token equality (73.2 matches 73.20; 73 does NOT match 73.5).',
+  'Dual-reading: when an operative term in a step admits more than one defensible reading ("unchanged", "similar", "stable", "near"), that ambiguity is itself an issue (return) — never silently pick one reading.',
+  'Also check the upstream premise: is this paper in fact a procedure source for THIS mechanism (the searcher\'s claim), or only shares its words? If only words → drop. Do not fail a card to look thorough; do not rubber-stamp.',
   ISOLATION,
 ].join('\n')
 

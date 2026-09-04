@@ -147,7 +147,7 @@ def _bundle_mod():
     return bundle
 
 
-SOURCES_SCHEMA = {"sources": [{"id": "S1", "verdict": "keep|drop|uncertain", "rank": 1,
+SOURCES_SCHEMA = {"sources": [{"id": "S1", "verdict": "keep|drop|uncertain", "rank": 1, "family_concern": "optional: named research family + 1-2 query phrases, or null",
                                "checks": [{"name": "|".join(SOURCE_CHECKS), "result": "pass|fail|unclear",
                                            "anchor": "verbatim substring of the bundle (recipe step / anomaly line / graveyard entry) the result rests on",
                                            "why": "one line"}]}]}
@@ -179,6 +179,12 @@ def cmd_sources() -> dict:
         "4. falsifiable_at_scale — 一次 ≤ 预算的实验能否返回一个杀死它的符号（claim 的 metric、kill bar）？没有这样的实验：fail。",
         "每个 result=fail 必须带 anchor：bundle 里的原文子串（≥12 字符），脚本会核对；没有 anchor 的 fail 不算数。",
         "verdict：drop 只在至少一项 fail 且 anchor 成立时给；拿不准给 uncertain。rank：1 = 最值得先花 GPU 的来源，按'最可能在预算内证伪 claim 且不与 graveyard 重复'排，不按品味。",
+        "Canonical wording of the four checks (ccf explorer): 1. Naive baseline — why does the obvious version not already work? If it would, the candidate is incremental: drop. 2. Recipe, not gist — does the source name a concrete mechanism change, or only the noun's new label? Label-only: drop. 3. Graveyard and precedent — does the graveyard or a precedent paper already execute this move on this gap? Yes: drop, name it. 4. Falsifiable at our scale — can one experiment inside the budget return a sign that kills it? No such experiment: drop.",
+        "You are the adversarial second family: most sources are trivial, some are already dead, a few are real. Your job is to leave the few. You do not invent problems to look thorough, and you do not soften a real flaw; do not refute a genuine flaw just to look decisive, and do not rubber-stamp.",
+        "STANDARD-TOOL FOLLOW-UP: most sources are textbook tools from another field. The recipe must name the DOMAIN-SPECIFIC STRUCTURE of A (a budget constraint, a coupling, adaptivity, a scale regime) that makes this instance not already solved by the textbook tool; if no such structure is nameable, the source is application-grade — naive_baseline fails (do not dress a textbook application as a method).",
+        "Graveyard / precedent: to fail this check you MUST anchor the concrete graveyard entry or precedent (name + its move); a vague 'feels done before' must never fail a source; no_threat_found is a valid answer and fabricating a generic threat is forbidden; do not discount an older precedent — a same-mechanism ancestor subsumes regardless of age. Judge only the live list; never re-judge `dropped`.",
+        "Falsifiable at our scale — self-check: can the spec exhibit at least one regime the incumbent cannot reach, and is the property the mechanism buys measured head-on rather than assumed to follow? Validation on a proxy (a secondary metric, toy scale, no matched baseline for the specific property) is the diagnostic tell.",
+        "`unclear` is the honest answer when evidence is insufficient: then `why` names the missing artifact or check. Optional `family_concern`: a SOFT signal from your own knowledge — if the mechanism plainly resembles an older named research family the map did not surface, NAME THE FAMILY and 1-2 query phrases; never a specific paper from memory (titles hallucinate; family names don't). It never feeds the verdict.",
         "铁律：不排品味；每个 drop 引一项检查；不新增候选；不改 claim。",
     ])
     prompt = b._prompt(task, bundle, SOURCES_SCHEMA, untrusted=True)
@@ -214,6 +220,12 @@ def cmd_spec(qid: str) -> dict:
         "5. feasibility — schedule.gpu_h ≤ kill_gpu_h_cap、files 与 steps 自洽、method_prose 与 steps 一致、不依赖 worktree 外的东西。",
         "两层规则：script_facts 是脚本事实，不得推翻（spec 已过确定性门）；你只定严重度。每条 finding 的 quote 必须是 bundle 里 spec / source / script_facts 的原文子串（≥12 字符），脚本核对；没有 quote 的 finding 不算数。",
         "verdict：abandon 需要至少一条 blocking；revise 需要至少一条 major（并给 revision_target：一句话说明改哪一处能翻转裁定）；其余 advance。默认 advance：只有一处 borderline 且不承重时不 revise。",
+        "falsification_structure in detail: quote the ONE load-bearing variable the mechanism claim pivots on (or 'absent'); the negative control must target the DOWNSTREAM outcome metric — a control of the form 'intervene on X → X becomes 0' tests a definition, not a mechanism (tautological); sound requires ALL of: minimal experiment named, outcome metric + direction named, load-bearing variable quoted, negative_control_target = outcome_metric; any 'absent' / 'tautological' → major. A spec that cannot say what MEDIATES its effect has a tuning direction, not a hypothesis. The kill criterion and the prediction band are fixed; do not reinterpret them. A result inside the band with a failed canary, a missing control arm, or a leaked evaluation split is UNVERIFIABLE, not SUPPORTED; a control that could not have failed is a blocking finding.",
+        "naive_equivalence in detail: ask where a gain would really come from — a genuinely new mechanism, or scale / data / benchmark / implementation / regularization / parameter count / evaluation protocol. If the spec's extra machinery over the naive version is cosmetic, that is an OBSTACLE HOLE: the mechanism does not confront the obstacle it exists to solve — abandon, never revise (avoidance patches — abstain on the affected cells, clamp the range, skip the regime — are FORBIDDEN as fixes).",
+        "collision / anti-pattern in detail: a mitigation is judged at the artifact level — keyword presence is not delivery; a 'we control for X' claim without the arm in kill_cmd / conditions is a major finding.",
+        "ANTI-CLAIM-AVOIDANCE: never emit a finding that pushes the spec or its method_prose to become vaguer; a strong claim with honest stated assumptions outranks a hedged weak one; if EVERY claim is already hedged, record that itself as a major finding (the mechanism asserts nothing checkable).",
+        "revision_target is STRENGTHEN-ONLY: additions only — the experiment, metric, claim, load-bearing variable and every existing control stay verbatim; anything that removes, swaps, weakens or cheapens is not a revision, it is abandon. Name exactly what to ADD and which check requires it.",
+        "Self-check each finding against the three refutation angles before filing: misreading (the thing is actually present in the spec), already-addressed (another field of the spec handles it), scope-or-severity (real but overstated). You do not invent problems to look thorough, and you do not soften a real flaw.",
         "铁律：不改 spec；不提自己的方案；不评价 claim 本身。",
     ])
     prompt = b._prompt(task, bundle, SPEC_SCHEMA, untrusted=True)
