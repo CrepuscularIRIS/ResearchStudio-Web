@@ -10,7 +10,7 @@ Every subcommand prints ONE JSON object on stdout (WORKFLOW.md §5).
   build <qid> [--fix]        → {qid, worktree, prompt, review_prompt}   one workflow: builder (GLM) → external diff review (Grok plugin)
   token <qid>                → {token}                                only after monitor/<qid>.json approved for the current diff
   notebook <qid>             → {entry}
-  write                      → {sections, polish_prompt, review_prompt}
+  write                      → {sections, review_prompt}
   pivot                      → {prompt}
   queue <qid> <text>         → {queued}
 """
@@ -233,7 +233,8 @@ def cmd_M() -> dict:
     _assert_size("M", bundle)
     return {"prompt_fable": _prompt(task, bundle, {"failure_modes": [{"id": "B1", "text": "", "grounded_in": [""]}], "mechanisms": [{"id": "M1", "from": "B1", "levels": ["", "", ""], "text": ""}]}),
             "claim": c.get("sentence", ""), "held_out": c.get("held_out"), "a_terms": _a_terms(c), "library": str(_repo() / "papers"),
-            "search": SEARCH, "max_sources_per_mechanism": 3, "out": str(HERE / "bundles" / "mechanism-out.json")}
+            "search": SEARCH, "fetch": ".research/fetch_text.py", "papers_dir": str(HERE / "lit" / "papers"),
+            "max_sources_per_mechanism": 3, "max_papers_per_source": 3, "precedent_max": 2, "out": str(HERE / "bundles" / "mechanism-out.json")}
 
 
 def _grounded(g: str, ground_txt: str) -> bool:
@@ -256,6 +257,19 @@ def _domain_stoplist(c: dict) -> list[str]:
 def _domain_words(text: str, stop: list[str]) -> list[str]:
     low = str(text or "").lower()
     return [w for w in stop if re.search(r"(?<![a-z0-9])" + re.escape(w) + r"(?![a-z0-9])", low)]
+
+
+def _quote_at(paper_txt: str, quote: str, line: int, window: int = 3, min_words: int = 6) -> bool:
+    """The quote's first words appear (whitespace-normalised, case-insensitive) within ±window lines of `line`. pdftotext breaks
+    lines mid-sentence, so the check joins the window and uses the first min_words words of the quote."""
+    lines = paper_txt.split("\n")
+    if line < 1 or line > len(lines):
+        return False
+    seg = re.sub(r"\s+", " ", " ".join(lines[max(0, line - 1 - window):line + window])).lower()
+    words = re.sub(r"\s+", " ", quote).strip().lower().split(" ")
+    if not words:
+        return False
+    return " ".join(words[:min_words]) in seg
 
 
 def cmd_mechanism_finish(out_path: str) -> dict:
@@ -309,31 +323,48 @@ def cmd_mechanism_finish(out_path: str) -> dict:
         rec = rec or {}
         kn = rec.get("key_number") or {}
         fails = []
+        raw_steps = rec.get("steps") or []
+        steps_txt = [st if isinstance(st, str) else str((st or {}).get("text") or "") for st in raw_steps]
+        step_quotes = [{"quote": st.get("quote"), "line": st.get("line")} for st in raw_steps if isinstance(st, dict)]
         if str(s.get("mechanism")) in bad_m:
             fails.append(f"mechanism {s.get('mechanism')} rests on an ungrounded or domain-bound failure mode")
         qw = _domain_words(s.get("query", ""), stop)
         if qw:
             fails.append(f"query is not cross-domain: contains {qw}")
-        if not rec.get("steps"):
+        if not [s_ for s_ in steps_txt if s_.strip()]:
             fails.append("no procedure steps (a name is not a recipe)")
         if not str(s.get("disanalogy", "")).strip():
             fails.append("no disanalogy (which assumption of C fails in A)")
         txt = rec.get("text_path")
         if txt and Path(txt).exists() and kn.get("line"):
+            paper_txt = Path(txt).read_text(errors="ignore")
             fm = {"provenance": {"stated": [{"claim": f"{kn.get('value', '')} {kn.get('quote', '')}", "line": int(kn["line"])}]}}
-            fails += gapmap.check_line_refs(fm, Path(txt).read_text(errors="ignore"))
-        elif kn:
+            fails += gapmap.check_line_refs(fm, paper_txt)
+            if kn.get("quote") and not _quote_at(paper_txt, str(kn["quote"]), int(kn["line"])):
+                fails.append(f"key_number quote is not at line {kn['line']} of {Path(txt).name}")
+            for i, sq in enumerate(step_quotes, 1):        # v4: every step carries its own quote and line; an invented one costs the source
+                if sq.get("quote") and not _quote_at(paper_txt, str(sq["quote"]), int(sq.get("line") or 0)):
+                    fails.append(f"step {i} quote is not at line {sq.get('line')} of {Path(txt).name}")
+            aq = rec.get("avoid_quote") or {}
+            if isinstance(aq, dict) and aq.get("quote") and not _quote_at(paper_txt, str(aq["quote"]), int(aq.get("line") or 0)):
+                fails.append(f"avoid quote is not at line {aq.get('line')} of {Path(txt).name}")
+        elif kn and (kn.get("quote") or kn.get("line")):
             fails.append("key_number has no verifiable text_path/line")
         prec = dict(s.get("precedent") or {})
         if prec.get("found"):
-            # an agent's boolean drops nothing on its own: the precedent needs a paper id AND a quote of >= 8 words (verifiable later)
-            if prec.get("paper") and len(str(prec.get("quote", "")).split()) >= 8:
+            # an agent's boolean drops nothing on its own: the precedent needs a paper id AND a quote of >= 8 words; with a text_path
+            # and line (v4 verifier) the quote must also be there
+            ptxt = prec.get("text_path")
+            at_line = (not ptxt or not Path(str(ptxt)).exists() or not prec.get("line")) or _quote_at(Path(str(ptxt)).read_text(errors="ignore"), str(prec.get("quote", "")), int(prec["line"]))
+            if prec.get("paper") and len(str(prec.get("quote", "")).split()) >= 8 and at_line:
                 fails.append(f"precedent: {prec.get('paper')} already applies this mechanism to A — {str(prec.get('quote', ''))[:120]}")
             else:
                 prec["found"] = False; prec["unverified"] = True
         entry = {"id": sid, "mechanism": s.get("mechanism"), "domain": s.get("domain"), "name": s.get("name"), "isomorphism": s.get("isomorphism"),
                  "disanalogy": s.get("disanalogy"), "naive_in_A": s.get("naive_in_A"), "pattern": s.get("pattern"), "query": s.get("query"),
-                 "recipe": {k: rec.get(k) for k in ("paper", "title", "steps", "key_number", "text_path", "avoid")},
+                 "recipe": {**{k: rec.get(k) for k in ("paper", "title", "key_number", "text_path", "avoid", "code_url", "disanalogy_to_A", "relation_to_claim", "scooped")},
+                            "steps": steps_txt, "step_quotes": step_quotes},
+                 "genes": s.get("genes"), "verify": s.get("verify"), "search": s.get("search"),
                  "precedent": prec, "status": "dropped" if fails else "open", "drop_reason": "; ".join(fails) if fails else None,
                  "best": None, "no_improve": 0, "tried": []}
         if prev and not fails:                                   # the hill-climb memory survives a re-run / an owner edit
@@ -689,9 +720,6 @@ def cmd_write() -> dict:
                                if ship else "主表只用 role=headline 的 record；screen 的数字只能出现在筛选/方法学段落并标明短 schedule 单种子；每个 negative result 的 record 都必须在负结果节出现")}
             task = f"用 bundle 里的 records 和 specs 重写 {path}；每个数字同一行加 `% src: <record path>` 注释（范围数字如种子数、网络数写 `% src: CLAIM.md`）；不引入 records 之外的数字；遵守 manuscript_rules 的禁写清单。每个 claim 句后面必须跟它的证据（claim–evidence matrix）；没有证据的句子删掉，不许加强措辞。实验节必须写明种子数、schedule 长度，以及 kill test 是短 schedule 单种子筛选。返回 {{\"written\": path}}。"
         secs.append({"path": str(path), "prompt": _prompt(task, bundle, {"written": ""}, tools_note="可以 Read bundle 里列出的路径并 Write 目标节；不搜索。")})
-    polish = _prompt("对 files 里的节做一次 register 抛光：不动 claim，不加数字，不动 `% src:` 注释。返回 {\"written\": \"...\"}。",
-                     {"files": sections, "manuscript_rules": rules_txt},
-                     {"written": ""}, tools_note="可以 Read/Write 这两个文件；不搜索。")
     review = _prompt("终审：逐个数字对照其 `% src:` record 文件；任何数字与 record 不符、任何缺 src 的数字、任何 manuscript_rules 禁写项 → block。"
                      "选择性叙事（ARFT E.2）也 block：board 里每个被 kill / 没刷新最好成绩的候选都必须在负结果讨论里出现；只报成功的稿子不通过。每个 claim 句必须能指到一条证据（issues 里列出没有证据的句子）；CLAIM.md 文献核对表里标为“必须讨论”的对照没出现在 related work 也 block。"
                      "register（manuscript_rules 里的写法规则：破折号预算、禁用词、二元对比上限、人称）由你逐条核对并列进 issues；register 问题单独标 `style:`，只有 style 问题时 verdict 仍是 pass，其它问题 block。返回 {\"verdict\": \"pass|block\", \"issues\": [\"file:line — why\"]}。",
@@ -700,7 +728,7 @@ def cmd_write() -> dict:
                       "method_prose": {k: (v or {}).get("method_prose") for k, v in specs.items()},
                       "rule": "从 run_dirs 的 seed_*.json 重新算 mean / CI95 并与 tex 对照；读 blockers.json；05_method 不得含 method_prose 之外的主张；任何矛盾 → block"},
                      {"verdict": "pass|block", "issues": []}, tools_note="可以 Read 这两个文件与 records/；不改任何文件；不搜索。")
-    return {"sections": secs, "polish_prompt": polish, "review_prompt": review}
+    return {"sections": secs, "review_prompt": review}
 
 
 def cmd_pivot() -> dict:

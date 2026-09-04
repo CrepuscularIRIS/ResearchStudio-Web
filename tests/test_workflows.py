@@ -21,7 +21,8 @@ def test_workflow_files_present_and_wellformed():
             assert "monitor: { external" in s, "the lens slot is `monitor.external`, what gate.py/step.py read"
             assert "smoke: {" not in s and "'pass', 'fail'" not in s, "the builder never self-reports a smoke verdict"
         if name == "mechanism":
-            assert "agentType: 'explorer'" in s and "agentType: 'researcher'" in s, "mechanism: Fable abstracts, K3 diverges, Grok retrieves"
+            assert "agentType: 'explorer'" in s and "agentType: 'searcher'" in s and "agentType: 'reader'" in s and "agentType: 'verifier'" in s, "mechanism: Opus abstracts, K3 diverges, GLM searches and reverse-engineers, sol verifies"
+            assert "agentType: 'researcher'" not in s, "the Grok lane left retrieval on 2026-09-04 (GLM waves)"
             assert "--start-year" in s and "--max-papers" in s, "the retrieval command uses search_papers.py's real flags"
         if name in ("spec", "build", "mechanism", "write"):
             assert "stallMs" in s, f"{name}: every long agent call carries a stall watchdog"

@@ -8,12 +8,12 @@ local corpus PDF first (80k CCF-A papers on /data), arXiv PDF second, then `pdft
 Writes `lit/papers/<id>.txt` and `lit/<cycle>.json`; never ranks, never reads the text.
 """
 from __future__ import annotations
-import argparse, json, re, subprocess, sys, time, urllib.request
+import argparse, json, os, re, subprocess, sys, time, urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 LIT = HERE / "lit"; PAPERS = LIT / "papers"
-CORPUS = Path("/home/lingxufeng/workspace/.claude.backup0902/scripts/corpus.py")
+CORPUS = Path(os.environ.get("RESEARCH_CORPUS", str(Path.cwd() / "search" / "corpus.py")))      # the local corpus index; RESEARCH_CORPUS or <project>/search/corpus.py
 UA = "research-loop fetch_text.py (mailto:anjun.lyu@gmail.com)"
 KEEP = ["title", "year", "venue", "url", "doi", "arxiv_id", "authors", "relevance_score",
         "citation_count", "found_in", "is_survey"]
