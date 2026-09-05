@@ -1,0 +1,26 @@
+# GOAL — one method for one measured failure
+
+This file is the Anchor. `dag.py` reads the `## FROZEN` block below and hands it verbatim to every workflow. The owner edits this block only; the pipeline never rewrites it. FROZEN defines the objective, platform, budget and bounds — NOT the claim (the research workflow produces the Claim).
+
+## FROZEN
+
+**Problem.** One paragraph: what must the method do, on what input, at what granularity. Name the failure it addresses.
+
+**Contribution type.** POSITIVE (a trained, deployable method that moves the metric) | DIAGNOSTIC | BENCHMARK. Say what the paper is NOT.
+
+**Measured (never re-measured; cite the source of each number).**
+- Anomaly 1 with its number and the artifact it came from.
+- Anomaly 2 …
+- Checkpoints / released code that exist locally (names only; paths live in substrate.json).
+
+**Protocol.** Networks, datasets, splits, seeds, the exact evaluation script, what is held out.
+
+**Baselines in every table.** The named comparators every result table must carry.
+
+**Keep rule (tighten, never loosen).** The statistical bar a candidate must clear (e.g. paired bootstrap CI95 excluding zero on the target metric; a clean-cost cap). The research workflow turns this into the Claim's contract rows; `dag.py put` may only tighten against it.
+
+**Budget.** kill_cap_gpu_h (the most any single kill test may cost), total_gpu_h, wall-clock per round.
+
+**Exit.** What ends the campaign (a kept method; or N cycles without a keep → research redo).
+
+**Out of scope.** Directions the pipeline must not propose.

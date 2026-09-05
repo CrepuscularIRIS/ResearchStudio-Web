@@ -1,7 +1,7 @@
 {
   "name": "research-harness",
-  "version": "0.2.0",
-  "description": "The claim loop for Claude Code: one falsifiable claim, a mechanism map (claim \u2192 failure modes \u2192 abstract mechanisms \u2192 source domains with recipes), one candidate at a time, script gates over artifacts, a launcher-run smoke and watchdog that cut losses mid-run, and a support ladder that generalises only after one model keeps. Four model lanes plus Codex before launch.",
+  "version": "0.3.0",
+  "description": "V8 research pipeline for Claude Code: three workflows on the native Workflow runtime — research (speculative DeepResearch with ResearchStudio transformation priors → one Claim with contract rows), experiment (adaptive plan/build/judge loop: cheapest decision-changing test, B1 spec, canary launch, deterministic invalidity ≠ refutation), paper (draft from evidence) — driven one line per turn by dag.py. Opus/Sol/K3 hold the few judgment seats, GLM does the reading and building, Grok CLI reviews code.",
   "author": {
     "name": "CrepuscularIRIS"
   },
@@ -9,10 +9,10 @@
   "keywords": [
     "research",
     "autoresearch",
+    "deep-research",
     "experiments",
-    "pre-registration",
-    "mechanism",
-    "codex",
-    "workflow"
+    "falsification",
+    "workflow",
+    "claude-code"
   ]
 }

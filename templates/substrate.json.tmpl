@@ -1,0 +1,16 @@
+{
+ "_note": "Absolute paths only. frozen_hosts.<name>.canary.expected is the clean number the SMOKE phase must reproduce (launch_wrap exit 3 otherwise).",
+ "datasets": {
+  "<DatasetName>": "/abs/path/to/dataset",
+  "<DatasetName>_splits": "/abs/path/to/splits"
+ },
+ "frozen_hosts": {
+  "<HostName>": {
+   "ckpt": "/abs/path/to/checkpoint.pth",
+   "code": "/abs/path/to/repo",
+   "provenance": "released | in-house (who trained it, when, which config)",
+   "canary": { "expected": 0.0, "tol": 0.1 }
+  }
+ },
+ "reference_suite": "/abs/path/to/eval_script.py"
+}

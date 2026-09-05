@@ -7,7 +7,7 @@
     {
       "name": "research-harness",
       "source": ".",
-      "description": "Claim loop: mechanism map \u2192 one candidate at a time \u2192 script gates \u2192 early stop \u2192 support ladder."
+      "description": "V8: research → experiment (plan/build/judge loop) → paper, one dag.py line per turn."
     }
   ]
 }

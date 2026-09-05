@@ -1,43 +1,80 @@
-# research-harness 0.2 — the claim loop
+# research-harness 0.3 — the V8 pipeline
 
-An unattended research loop for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), in the shape of paperjury and the built-in workflows: six small **workflow files** do the semantic fan-out (inputs inline, schema outputs, no filesystem), and **scripts run between them** — a read-only navigator (`stage.py`), five idempotent actions (`step.py`), content-checking gates (`gate.py`), a record renderer, and a GPU launcher that writes the ledger. Main only ever executes the one line the navigator prints.
+An unattended research loop for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) built on the native `Workflow` runtime. Three workflow files do all the thinking; one script (`dag.py`) decides what runs next and prints **one line per turn**. Main only ever executes that line.
 
-## What is different from 0.1
+```
+research  →  Claim (statement · strategy · contract rows · premises · naive · falsifier)
+experiment  plan → build → judge → plan …   (cheapest decision-changing test each cycle)
+paper     →  draft from the evidence that exists
+```
 
-- **One claim, fixed by the owner** (`CLAIM.md` + `stage.py accept`). Every gate refuses while its sha differs.
-- **Ideas come from a mechanism map, not from a lane's free text** (Sparking): Fable turns the claim and the project's *measured* anomalies into failure modes and three-level abstract mechanisms; K3 diverges into source domains with an isomorphism sentence and a disanalogy; Grok retrieves each recipe as a procedure with a quoted line and checks for precedent. Sources without a procedure or with a precedent are dropped by script.
-- **Specs are B1**: every step names an existing file and what changes there; a method name is refused (ASI-Bench: a half-specified method costs 59% more tokens and scores 21.8 points lower than a full procedure).
-- **The builder never judges itself**: the launcher runs a SMOKE phase (canary), then a watchdog kills a run whose dev gain is below the early-stop line at 25% / 50% of the schedule (exit 4 = recorded early kill) or that stalls (exit 5). ARFT: 82.5% of trajectories find their fatal flaw in self-review and ship anyway.
-- **Verification the agent does not control**: Grok's coverage and findings must quote diff lines that exist in the real diff; Codex reviews the same diff; a token binds approval to the diff's sha; records come from result files inside the unit's window.
-- **Cut losses by rule**: same source twice without a new best → source exhausted; every source exhausted → stop and pivot. Generalise only after one model keeps (3 seeds, CI95 above 0), one rung at a time.
-- **Four lanes plus Codex**: Fable (abstraction, specs), K3 (divergence, pivot), Grok (retrieval, monitor, final review), GLM (Main, builder, writer), Codex (pre-launch review only).
+0.3 replaces everything in 0.1/0.2 (lanes, hooks, gate.py, stage/step/bundle, the six workflows). Nothing of those remains; git history has them.
+
+## What each workflow is
+
+**research** — *Speculative DeepResearch × ResearchStudio transformation priors.* Five phases, ~22 seats, no cascade gates:
+- **Reframe** (t=0, no barrier): Opus (conceptual prior) ∥ K3 (adversarial prior) ∥ GLM ×3 foundation searches (baseline / closest / contrary). Reframe seats read exactly one file — the 15 ideation-pattern overview.
+- **Routes**: Sol formalises every route (formal object · naive solution + branch · kill observation · runnable); `naive_suffices`/`runnable=false` is a formal kill. GLM planner emits decision-bound queries `{query, route_id, if_yes, if_no}`; a route changes state only with `evidence_ids` that exist in the pool — opinion never kills.
+- **Digest**: GLM writes the bottleneck as a *failure, not an absent cure* + the negative-knowledge slice (Reject lessons quoted from the surviving pattern cards); lazy match against the 31 sub-patterns.
+- **Factory**: GLM sketch swarm (smallest runnable mechanism) → mechanical prune → top-4 full Claims ∥ collision search (signature / alias / GitHub).
+- **Verdict**: K3 prosecutes (CLEAR / CHALLENGE / SEARCH_REQUIRED — a challenge flags, never kills) ∥ Sol formal review (six HARD_KILL classes) → JS composes; Opus picks only on a true tie.
+
+**experiment** — *Adaptive experimentation with failure-induced priors.* Three modes the dag cycles:
+- **plan**: Sol ∥ K3 ∥ GLM each propose tests (MDE, kill_condition, cost, canary, dev-half only); JS hard floors; Opus picks the one that most changes what we believe.
+- **build**: Sol compiles a B1-complete spec (steps down to functions; a method name is refused) → GLM implements in a worktree → one-pass Bash checks + review → one bounded fix round → Grok CLI review → canary launch via `launch_wrap.sh` (exit 3 canary · 4 early kill · 5 infra).
+- **judge**: deterministic manifest → JS invalidity floors (NaN, test-half reads, missing seeds — *invalid ≠ refuted, Claim unchanged*) → GLM recompute ∥ integrity → analysis + conditional K3 → Grok audit → E with derived `claim_strength`.
+
+**paper** — assemble (Claim + evidence → section plan, table skeleton) → draft (CCFA contracts in the prompt: evidence ladder, claim-action rules, one table one statement, number provenance) → lint → Grok audit.
+
+**dag.py** — objects: `claims/C-*.json`, `experiments/X-*.json`, `paper/draft-*.md`. Commands: `next` (prints `WORKFLOW: <name> args=<file>` | `WAIT: <unit>` | `STOP: <why>`), `put <name> <out.json>` (validates the return against the lattice, prints `OK` | `RETRY` (infra, no cycle consumed; 3 in 2 h → `STOP: INFRA`) | `REJECT`), `board`. Cycle cap 8 per Claim; research redo cap 3.
+
+## Model seats (one full pass)
+
+|      | research | experiment (× cycles) | paper |
+|------|----------|-----------------------|-------|
+| Opus | 2 (reframe, tie-pick) | 1 (plan pick) | 0 |
+| Sol  | 2 (routes, formal)    | 2 (falsifier, spec) | 0 |
+| K3   | 2 (reframe, prosecute)| 1–2 (plan, conditional) | 0 |
+| Grok CLI | 0 | 2 (review, audit) | 1 (audit) |
+| GLM  | ~15–20 | ~8 / cycle | ~4 |
+
+Model ids are constants at the top of each workflow (`MODEL = {...}`); change them there.
 
 ## Install
 
 ```
 claude plugin marketplace add CrepuscularIRIS/research-harness
 claude plugin install research-harness
-/research-harness:init       # in the project root
+/research-harness:init          # in the project root
 ```
 
-Then edit `GOAL.md` (campaign block + FROZEN), `.research/anomalies.md` (your measured findings), pin the lane models in `.claude/agents/*.md`, and run `python3 .research/stage.py`.
+`init` writes `.research/{dag.py,tools/,harness.json,GOAL.md,substrate.json}`, `.claude/workflows/*.workflow.js`, `.claude/skills/paper-search/`, `.claude/CLAUDE.md`, and the `Workflow(research|experiment|paper)` allow rules. Then:
 
-## The loop
+1. Fill every field of `.research/GOAL.md` `## FROZEN` (objective, platform, measured facts, protocol, keep rule, budget, out of scope — **not** the claim; the research workflow produces that).
+2. Put absolute paths and the canary number in `.research/substrate.json`.
+3. In `.research/harness.json` set `exp_repo` (the git repo experiments are built in) and `rs_ref` (see *External dependencies*).
+4. `python3 .research/dag.py next` → it prints `WORKFLOW: research …`. `/research-harness:research` runs one turn; `/goal "python3 .research/dag.py next prints STOP; …"` runs unattended.
 
-```
-A  frame      Fable writes CLAIM.md → owner accepts
-M  mechanism  Fable (B, M) → K3 (C) → Grok (recipe, precedent) → mechanism-map.json
-C  loop       per chain: propose → propose --finish → build → build --finish → record   (5 Main actions)
-              unit: SMOKE → train under the watchdog → seed files; record gate; hill-climb on the map; band hit → confirm seeds
-              after one KEEP: the support ladder (other networks, datasets, ablation), one rung at a time
-P  pivot      K3 once → owner picks an exit
-D  write      writer per section → Fable polish → Grok review → gate.py numbers (every number cites a record)
-```
+## External dependencies (not vendored)
 
-Docs: `docs/SPEC.md` (the design), `docs/ARCHITECTURE.md` (who decides what, step by step), `docs/REVIEW-2026-09-03.md` (the source review behind it), `docs/ACCEPTANCE.md`.
+- **ResearchStudio `idea_spark` references** — the research workflow reads `ideation-patterns/overview.md`, the 31 sub-pattern cards, `companion-combos.md` and `anti-patterns.md` from `harness.json: rs_ref`. Clone ResearchStudio and point `rs_ref` at `…/ResearchStudio-Idea/skills/idea_spark/references`.
+- **Grok CLI plugin** — `harness.json: grok_cli` (auto-detected under `~/.claude/plugins/cache/grok/` by `init`). Absent Grok is recorded as unavailable, never as a verdict.
+- **paper-search skill** (vendored under `skills/`) needs its own API keys — see `skills/paper-search/SKILL.md`.
+- **systemd --user** for launches (`launch_wrap.sh` writes the exit code to the ledger).
 
-## Sources this shape comes from
+## Design documents
 
-paperjury (workflows + orchestrator-side scripts, isolation by not giving, quotes verified by script, idempotent retry), Claude Code's built-in deep-research and code-review (three-state votes, null is not a refutation, no silent caps), AAR (submit-model contract, monitor reads the code, frozen mini-paper, decoupled GPU jobs, one method per iteration), ResearchStudio (read-only navigator, execute-don't-review gate, kill-switch fields, naive baseline), ASI-Bench, "How Do AutoResearch Agents Fail" (ARFT), and the strategy-gene paper (one control object per context, failure warnings standalone).
+`docs/PIPELINE-V8.md` (why the rewrite), `PIPELINE-V8-PLAN.md` (object model, GATE primitive, budgets), `PIPELINE-V8-RESEARCH-V2.md` (the speculative-DR design that replaced the gate chain), `PIPELINE-V8-EXPERIMENT-PLAN.md` (ladder, K-gate/RR, ARFT/ARIS/CCFA sources), `PIPELINE-V8-PAPER-PLAN.md`.
+
+## Tests
+
+`node tests/mock_runtime_research.mjs` · `node tests/mock_runtime_experiment.mjs` — mock-runtime full-chain runs with schema-minimal fixtures (no model calls). `python3 -m py_compile scripts/dag.py`.
+
+## Known issues (tracked for 0.3.1)
+
+- `dag.py put` does not yet accept `spec_blocked` / `no_valid_tests` (REJECT); `canary_fail` / `early_kill` are treated as infra (RETRY) and can hit the 3-strike stop.
+- `judge` reads the unit exit from `systemctl show`, which is empty once a transient unit has exited — it should read the `stop` event `launch_wrap.sh` writes.
+- `build` proceeds when only floors (not findings) remain after the fix round (`&&` should be `||`).
+- Budget (`kill_cap_gpu_h`, `total_gpu_h`) is read from FROZEN as JSON; FROZEN is markdown, so the defaults (4 / 100) apply. Put the numbers in `harness.json` in the next revision.
 
 MIT.
