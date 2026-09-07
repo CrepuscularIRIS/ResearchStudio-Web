@@ -221,6 +221,12 @@ def test_navigator_state_machine(tmp_path):
     d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 0 and "stale brain.lock" in d["note"] and "acquire" in d["run"][0] and "release" in d["run"][-1], d
     r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0 and "stale" in r.stdout, r.stdout
     r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); assert r.returncode == 0 and not (root / "brain.lock").exists()
+    # artifacts present but a fresh lock: still WAIT (the Brain writes spec/index.json before its last repair); brain.done.json ends the wait
+    (root / "r1" / "spec" / "index.bak").rename(root / "r1" / "spec" / "index.json")
+    r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0
+    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 900 and "nothing to claim" in d["state"], d
+    (root / "brain.done.json").write_text("{}"); d = _nav(root, env); assert d["phase"] == "EXPERIMENT" and d["skill"] == "exp-next", d
+    r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); (root / "r1" / "spec" / "index.json").rename(root / "r1" / "spec" / "index.bak")
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
     (root / "r1" / "spec" / "index.bak").rename(root / "r1" / "spec" / "index.json")
     # no ledger → claim the first block
@@ -280,3 +286,18 @@ def test_navigator_card_ladder(tmp_path):
 
 def test_auto_skill_exists():
     t = (WS / ".claude/skills/exp-auto/SKILL.md").read_text(); assert "next.py" in t and "/loop" in t and "BLOCKED" in t
+
+
+def test_parse_findings_takes_the_last_complete_document():
+    """Real grok 1.0.13 output (ccf X-001 spec review): {"text": "<5 concatenated JSON documents>"} — four intermediate ones with findings: [] and the
+    completed review last. parse_findings must return the last complete one; single documents and wrapped result fields still parse."""
+    import importlib.util, json
+    spec = importlib.util.spec_from_file_location("critic", EXP / "critic.py"); mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    raw = (GOLD / "grok_spec_raw.txt").read_text(encoding="utf-8")
+    F = mod.parse_findings(raw)
+    assert F and F.get("x_id") == "X-001" and F.get("mode") == "spec" and len(F["findings"]) == 6 and F.get("verdict_agree") is False, (F or {}).keys()
+    one = json.dumps({"x_id": "X", "mode": "code", "verdict_agree": True, "findings": [], "failure_level": None, "credit_due": [], "anomalies": []})
+    assert mod.parse_findings(one)["mode"] == "code"                                            # a single complete document with no findings still parses
+    assert mod.parse_findings(json.dumps({"result": one}))["mode"] == "code"                    # wrapped in a result string
+    assert mod.parse_findings("noise " + one + one.replace('"findings": []', '"findings": [{"anchor": "a", "class": "C.1", "blocking": true, "note": "n"}]'))["findings"][0]["class"] == "C.1"
+    assert mod.parse_findings("nothing here") is None

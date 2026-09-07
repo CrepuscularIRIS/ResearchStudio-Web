@@ -67,17 +67,17 @@ function navigate(rd) {
 }
 
 // ---------------------------------------------------------------- scripted shell
-let tagRepaired = false
+let tagRepaired = false, bashFailed = false
 function runSub(cmd) {
   let m
   if (/print\("AUDIT_MERGE/.test(cmd)) return process.env.MOCK_SECOND_KILL ? 'AUDIT_MERGE k3=advance second=abandon final=revise added_targets=2' : 'AUDIT_MERGE k3=advance second=advance final=advance added_targets=0'
   if (/print\("MISSING"/.test(cmd)) { if (process.env.MOCK_TAG_MISSING && !tagRepaired) { tagRepaired = true; return 'MISSING 3 dropped 1' } return 'MISSING 0 dropped 0' }
   if (/print\("__QUOTE/.test(cmd)) return '__QUOTE 3/3 verified'
   if ((m = /run\.py'? next --dir '([^']+)'/.exec(cmd))) return navigate(m[1])
-  if ((m = /lit_table_merge --out '([^']+)'/.exec(cmd))) { add(m[1] + '/lit_table.md'); return 'merged 2 shards' }
+  if ((m = /lit_table_merge --out '([^']+)'/.exec(cmd))) { add(m[1] + '/lit_table.md'); return 'merged 2 shards\n__RC0=0' }
   if (/print\("SHARDS"/.test(cmd)) return 'SHARDS 2 20'
   if ((m = /phase2_prepare --dir "([^"]+)"/.exec(cmd))) { add(m[1] + '/phase2_generate/closest_abstracts.json'); return 'prepared' }
-  if ((m = /phase4_skeleton .* --out "([^"]+)\/"/.exec(cmd))) { add(m[1] + '/phase4_skeleton.json'); return 'skeleton' }
+  if ((m = /phase4_skeleton .* --out "([^"]+)\/"/.exec(cmd))) { if (process.env.MOCK_BASH_FAIL && !bashFailed) { bashFailed = true; forceRc = 1; return 'phase4_skeleton: malformed candidate patch (append_items must be a list)' } add(m[1] + '/phase4_skeleton.json'); return 'skeleton' }
   if ((m = /phase4_assemble .* --out "([^"]+)\/"/.exec(cmd))) { add(m[1] + '/phase4_expansion.json'); return 'assembled' }
   if ((m = /phase4_method_view .* --out "([^"]+)\/"/.exec(cmd))) { add(m[1] + '/method_view.json'); return 'view' }
   if (/regression_check\.py/.test(cmd)) return 'regression: 0 fail'
@@ -236,12 +236,17 @@ assert(idx(/^sh: r1: collision launch/) < cohR1.i && cohR1.i < idx(/^sh: r1: col
 
 const aud = seats.filter((c) => /Phase 3\.2/.test(c.label))
 const audK3 = aud.filter((c) => c.model === 'k3-256k'), audSol = aud.filter((c) => c.model === 'gpt-5.6-sol')
-assert(audK3.length === 2 && audSol.length === 2 && audSol.every((c) => c.prompt.includes('SECOND AUDITOR') && c.prompt.includes('second_opinion.json')) && audK3.every((c) => !c.prompt.includes('SECOND AUDITOR')), 'per run: one K3 audit + one Sol second auditor, same prompt family, own output file')
+if (process.env.MOCK_BASH_FAIL) {
+  const rep = aud.filter((c) => c.prompt.includes('PREVIOUS ATTEMPT REJECTED'))
+  assert(audK3.length === 3 && rep.length === 2 && rep.every((c) => c.prompt.includes('append_items must be a list')), 'a deterministic step that rejects the audit output sends the seat back once with the rejection (K3 + second auditor): ' + audK3.length + '/' + rep.length)
+  assert(sh.filter((c) => /run\.py['"]? phase4_skeleton /.test(c.cmd)).length === 3, 'the rejected step runs again after the repair pass (r1 fail + r1 retry + r2)')
+} else assert(audK3.length === 2 && audSol.length === 2 && audSol.every((c) => c.prompt.includes('SECOND AUDITOR') && c.prompt.includes('second_opinion.json')) && audK3.every((c) => !c.prompt.includes('SECOND AUDITOR')), 'per run: one K3 audit + one Sol second auditor, same prompt family, own output file')
+assert(audSol.every((c) => c.prompt.includes('THREAT QUOTE') && c.prompt.includes('COMPACT INPUTS') && !/^\s+- \/[^\n]*phase0\/lit_table/m.test(c.prompt)) && audK3.every((c) => /phase0\/lit_table/.test(c.prompt)), 'second auditor keeps the context lines but not the Phase 0 corpus files; K3 keeps them')
 const mergeCalls = calls.filter((c) => /print\("AUDIT_MERGE/.test(c.cmd || ''))
-assert(mergeCalls.length === 2 && mergeCalls.every((c) => c.i > Math.max(...aud.map((a) => a.i)) - 20), 'one deterministic audit merge per run after both auditors')
+assert(mergeCalls.length === (process.env.MOCK_BASH_FAIL ? 3 : 2), 'one deterministic audit merge per audit pass (the self-heal repair pass merges again): ' + mergeCalls.length)
 assert(result.runs.every((r) => /^AUDIT_MERGE k3=advance second=(advance|abandon) final=(advance|revise)/.test(r.audit_merge || '')), 'merge line recorded per run: ' + JSON.stringify(result.runs.map((r) => r.audit_merge)))
 if (process.env.MOCK_SECOND_KILL) assert(result.runs.every((r) => /final=revise/.test(r.audit_merge)), 'a second-auditor abandon downgrades advance to revise, never to abandon')
-assert(aud.length === 4 && aud.every((c) => c.prompt.includes('critique.txt (verbatim)') && c.prompt.includes('references/anti-patterns.md (verbatim; inlined') && c.prompt.includes('<each cited C##>.md')), 'audit seats: K3, anti-patterns inlined, card marker passed through')
+assert(aud.length === (process.env.MOCK_BASH_FAIL ? 6 : 4) && aud.every((c) => c.prompt.includes('critique.txt (verbatim)') && c.prompt.includes('references/anti-patterns.md (verbatim; inlined') && c.prompt.includes('<each cited C##>.md')), 'audit seats: K3, anti-patterns inlined, card marker passed through')
 assert(seats.filter((c) => /Phase 4\.fill/.test(c.label)).every((c) => c.model === 'claude-opus-5' && c.prompt.includes('expand.txt (verbatim)') && c.prompt.includes('formula-derivation/SKILL.md (verbatim; inlined') && c.prompt.includes('KEY EQUATIONS DISCIPLINE')), 'fill on Opus with the ARIS derivation discipline')
 assert(seats.filter((c) => /Phase 4\.derive/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]' && c.effort === 'low'), 'derive on GLM low')
 assert(seats.filter((c) => /Phase 4\.1\.5/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]'), 'implementability on GLM')

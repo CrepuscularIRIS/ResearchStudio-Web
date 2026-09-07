@@ -5021,7 +5021,7 @@ Also write spec/index.json: {"blocks": ["B1", ...], "run_order": [...], "first_b
 
 keep_if_all keys are the keys the repository's verdict instrument writes (see instruments/README.md if present; typical: delta, ci_lo, ci_hi, both_rungs_exclude_zero, per_rung.<rung>.ci_lo, candidate_clean_cost, negctrl_delta, negctrl_ci_lo, networks_keep); ops are gt/gte/lt/lte/eq; every rule is a number or boolean, never prose.
 
-Rules: every path in changes[] and run_cmd must exist in the repository (you verified it with Read/Glob); never invent a launcher — if the repository lacks one, say so in smoke_cmd and name the closest existing script; forbids must include the test half and every protected evaluation script named in substrate.md; every underspecified point with severity "open" in phase4_implementability.json appears in open_holes with a resolution or with "blocked" set; the first block in index.json is the cheapest test that can kill the idea; do not change any scientific decision of the evidence plan — if a block cannot be specified, write it with "blocked": "<why>" instead of guessing. gates follow the ASI-Bench evaluation.gates form (task.yaml inlined below): hard, structural, script-checkable — one file_exists gate per outputs[] entry, one forbidden_pattern or forbidden_import gate per forbids[] entry, no_nan_inf on every numeric result file — never a science check; the B1 prompt inlined below shows the completeness a procedure must reach (every convention, law and constant disclosed); and per how-scoring-works.md self-reported scores are never trusted: the verdict instrument reads result files, never the Worker's summary.` }
+Rules: every path in changes[] and run_cmd must exist in the repository (you verified it in the REPOSITORY MAP input or with Read) — a file the block itself creates is written with "function": "NEW file" and lives in a directory that exists; locate files in the REPOSITORY MAP, never by crawling with Glob/Grep; never invent a launcher — if the repository lacks one, say so in smoke_cmd and name the closest existing script; forbids must include the test half and every protected evaluation script named in substrate.md; every underspecified point with severity "open" in phase4_implementability.json appears in open_holes with a resolution or with "blocked" set; the first block in index.json is the cheapest test that can kill the idea; do not change any scientific decision of the evidence plan — if a block cannot be specified, write it with "blocked": "<why>" instead of guessing. gates follow the ASI-Bench evaluation.gates form (task.yaml inlined below): hard, structural, script-checkable — one file_exists gate per outputs[] entry, one forbidden_pattern or forbidden_import gate per forbids[] entry, no_nan_inf on every numeric result file — never a science check; the B1 prompt inlined below shows the completeness a procedure must reach (every convention, law and constant disclosed); and per how-scoring-works.md self-reported scores are never trusted: the verdict instrument reads result files, never the Worker's summary.` }
 
 // Deterministic checks (run by the runner; they print __PLAN_OK / __PLAN_BAD, __SPEC_OK / __SPEC_BAD, __QUOTE ...).
 const PLAN_CHECK_PY = `import json, re, sys
@@ -5117,7 +5117,11 @@ for f in files:
         if k not in d or d[k] in ("", {}, None): bad.append(n + " missing " + k)
     for ch in d.get("changes") or []:
         fp = str(ch.get("file") or "")
-        if fp and not os.path.exists(os.path.join(repo, fp)) and not os.path.exists(fp): bad.append(n + " change file not found: " + fp)
+        creates = bool(ch.get("new")) or bool(re.match(r"^\\s*NEW\\b", str(ch.get("function") or ""), re.I))
+        if fp and creates:
+            parent = os.path.dirname(os.path.join(repo, fp))
+            if not os.path.isdir(parent) and not os.path.isdir(os.path.dirname(fp)): warn.append(n + " new file in a directory that does not exist yet: " + fp)
+        elif fp and not os.path.exists(os.path.join(repo, fp)) and not os.path.exists(fp): bad.append(n + " change file not found: " + fp + " (a file the block creates must say function: NEW)")
     for key in ("run_cmd", "smoke_cmd"):
         cmd = str(d.get(key) or "")
         if re.search(r"(^|\\s)SMOKE=", cmd): bad.append(n + " " + key + " sets SMOKE itself")
@@ -5548,7 +5552,7 @@ function seatPrompt(kind, dyn) {
 // declares `fallback` takes its retry on that model instead (Astra unavailable → Opus); `forceModel` starts the
 // seat on a given model (the verify→retry path forces the fallback when the primary's output was unreadable).
 // The result carries `model` (which model produced it) and `fell_back` for the run record.
-async function seat(kind, dyn, label, phaseName, schema, forceModel) {
+async function seat(kind, dyn, label, phaseName, schema, forceModel, opts2) {
   const s = SEATS[kind]
   const primary = forceModel || s.model
   const opts = { label: label.slice(0, 60), phase: phaseName, schema: schema || SEAT_SCHEMA, model: primary, effort: s.effort, disallowedTools: DENY[s.tools] }
@@ -5556,7 +5560,7 @@ async function seat(kind, dyn, label, phaseName, schema, forceModel) {
   const prompt = seatPrompt(kind, dyn)
   let r = await agent(prompt, opts)
   let used = primary
-  if (!r || !r.ok) {
+  if ((!r || !r.ok) && !(opts2 && opts2.retry === false)) {
     const retryModel = (s.fallback && s.fallback !== primary) ? s.fallback : primary
     log((dyn.run || '-') + ' ' + kind + ': first attempt on ' + primary + ' failed (' + ((r && r.note) || 'no result') + ') — retrying once' + (retryModel !== primary ? ' on the fallback model ' + retryModel : ''))
     r = await agent(prompt, Object.assign({}, opts, { model: retryModel }))
@@ -5743,7 +5747,8 @@ async function driveRun(id) {
   let phase1Marked = id !== 'r1'
   const markPhase1 = (ok) => { if (!phase1Marked) { phase1Marked = true; phase1Resolve(ok) } }
 
-  async function runSeat(em, k, forceModel) {
+  let producer = null                                // the seat whose outputs the next deterministic step consumes (self-heal target)
+  async function runSeat(em, k, forceModel, extraNotes) {
     const long = em.run.filter(isLong), short = em.run.filter((c) => !isLong(c))
     for (const c of short) await prep(c, lbl('prep ' + base((c.split(' ')[2] || '').replace(/['"]/g, ''))), 'Runs')   // phase2_prepare, revise_brief, falsification_view
     // 3.1 collision rides along with 2.3 (background, deterministic); for the signature_terms
@@ -5754,7 +5759,7 @@ async function driveRun(id) {
     let notes = em.notes
     if (short.length) notes = notes.replace(/Run the RUN command first \([^)]*\)(, then the sub-agent)?\.\s*/, 'The deterministic RUN command has already been executed by the workflow (its output file is listed under INPUT). ')
     if (job && k !== 'terms') notes = notes.replace(/TWO independent actions: \(1\).*?\(2\) run the 2\.3 sub-agent\.\s*/s, 'The 3.1 collision retrieval has already been launched in the background by the workflow — do only the 2.3 work. ')
-    const dyn = { rd, run: id, repo: BRIEF.repo, step: em.step, inputs: inputs.concat(brainContext(k, id)), output: em.output, notes }
+    const dyn = { rd, run: id, repo: BRIEF.repo, step: em.step, inputs: inputs.concat(brainContext(k, id)), output: em.output, notes: notes + (extraNotes ? ' ' + extraNotes : '') }
     if (k === 'coherence') {
       dyn.workdir = rd + '/phase2_coherence'
       await prep('rm -f ' + shq(rd + '/phase2_coherence/blocking_findings.json') + ' ' + shq(rd + '/phase2_coherence/refined_candidate.json'), lbl('prep 2.3 (clear stale side outputs)'), 'Runs')   // a previous, unfinished attempt must not hand 3.2 stale findings
@@ -5764,8 +5769,10 @@ async function driveRun(id) {
       // The second auditor runs the SAME audit (prompt, refs, inputs) in parallel on its own model and context, into its own file; the
       // deterministic merge then folds its vote into K3's file: advance + a second challenge → revise (targets appended); K3's abandon stands.
       const out2 = rd + '/phase3_critique/second_opinion.json'
-      const dyn2 = Object.assign({}, dyn, { output: out2, notes: (dyn.notes || '') + ' SECOND AUDITOR (Brain addition): you are the second, independent auditor of this candidate — same five checks, same output JSON, written to ' + out2 + ' and nowhere else; the first auditor\'s verdict is not shown to you and the workflow merges the two afterwards.' })
-      const [r1, r2] = await parallel([() => seat(k, dyn, lbl(em.step), 'Runs'), () => seat(k, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, SEATS.audit.second)])
+      // compact inputs for the second auditor: no Phase 0 corpus files (lit_table / lit_results / fulltext) — a 128k-class model died 7× on 'Prompt is too long' reading them (ccf run 2026-09-07); the first auditor owns the literature check
+      const inputs2 = dyn.inputs.filter((l) => !(/^\//.test(l) && /phase0\/(lit_table|lit_results|fulltext)/.test(l)))   // file lines only; context lines (THREAT QUOTE etc.) stay
+      const dyn2 = Object.assign({}, dyn, { inputs: inputs2, output: out2, notes: (dyn.notes || '') + ' SECOND AUDITOR (Brain addition): you are the second, independent auditor of this candidate — same five checks, same output JSON, written to ' + out2 + ' and nowhere else; the first auditor\'s verdict is not shown to you and the workflow merges the two afterwards. COMPACT INPUTS: do not open anything under phase0/ (lit_table.md, lit_results.json, fulltext) and read no file larger than the ones listed — the first auditor covers the literature; judge from the candidate, the Phase 2.1 selection, the collision hits, the blocking findings and the FROZEN goal.' })
+      const [r1, r2] = await parallel([() => seat(k, dyn, lbl(em.step), 'Runs'), () => seat(k, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, SEATS.audit.second, { retry: false })])
       r = r1
       st.seats.push({ kind: 'audit_second', step: em.step, ok: !!(r2 && r2.ok), signal: (r2 && r2.signal) || '', model: (r2 && r2.model) || SEATS.audit.second })
       if (r && r.ok && r2 && r2.ok) {
@@ -5778,6 +5785,7 @@ async function driveRun(id) {
     if (r && r.fell_back) st.fallbacks.push({ kind: k, step: em.step, from: SEATS[k].model, to: r.model })
     if (!r || !r.ok) throw new Error(k + ' seat failed twice: ' + ((r && r.note) || 'no result'))
     lastSeat = { em, k, outputs: emitOutputs(em), retried: false, phase1Ok: k === 'phase1' && !/do_not_generate/.test(r.signal || '') }   // Phase 1 is shared with r2..rK only once its outputs verified readable
+    producer = { em, k, repaired: !!extraNotes }
     if (job) {
       if (k === 'terms' && !(await launch(job.key, SKIP_ENV + long[0], lbl('collision'), 'Runs'))) throw new Error('could not launch collision')
       const w = await waitFor(job.key, job.file, lbl('collision'), 'Runs')
@@ -5851,6 +5859,15 @@ async function driveRun(id) {
       if (pending) {
         const r = await runThenNext(rd, pending, lbl(pending.length + ' cmd → next'), 'Runs')
         const failed = r.rcs.map((rc, j) => (rc !== 0 ? j : null)).filter((x) => x !== null)
+        if (failed.length && producer && !producer.repaired) {
+          // the step that consumes the last seat's output rejected it (e.g. RS merge_revisions on a malformed patch): one repair pass of that seat with the rejection, then the same step again
+          const why = 'PREVIOUS ATTEMPT REJECTED (Brain addition): the deterministic step that consumes your output failed — `' + pending[failed[0]].slice(0, 200) + '` :: ' + r.out.replace(/__RC\d+=\d+/g, '').trim().slice(-900) + ' — read your output file(s) again, fix exactly what the step rejects (shape, field types, required keys), and write them whole.'
+          log(id + ' ' + producer.k + ': deterministic step rejected its output — one repair pass')
+          const em0 = producer.em; const k0 = producer.k
+          pending = null
+          await runSeat(em0, k0, undefined, why)
+          continue
+        }
         if (failed.length) throw new Error('bash step failed (rc ' + failed.map((j) => r.rcs[j]).join(',') + '): ' + pending[failed[0]].slice(0, 160) + ' :: ' + r.out.slice(-500))
         pending = null
         e = r.emit
@@ -5935,7 +5952,7 @@ async function driveRun(id) {
     let extra = ''
     const pre = await planCheck(), pv = (/__PLAN_(OK|BAD) ?([^\n]*)/.exec(pre.out) || [])   // resumability: an existing evidence_plan.json is judged, never regenerated blindly
     if (pv[1] === 'OK') { st.evidence_plan = out; st.plan_check = 'OK (existing plan kept)' + (pv[2] ? ': ' + pv[2].slice(0, 400) : ''); log(id + ' Phase 5: existing evidence_plan.json passes plan_check — seat skipped') }
-    else if (pv[1] === 'BAD' && !/unreadable/.test(pv[2] || '')) extra = ' PLAN_CHECK FINDINGS on the existing file (deterministic; fix every item, rewrite the whole file): ' + (pv[2] || '').slice(0, 1200)
+    else if (pv[1] === 'BAD' && !/unreadable/.test(pv[2] || '')) extra = ' PLAN_CHECK FINDINGS on the existing file (deterministic; PATCH: fix exactly these items and keep everything else byte-identical): ' + (pv[2] || '').slice(0, 1200)
     for (let attempt = 0; attempt < 2 && !(attempt === 0 && st.evidence_plan); attempt++) {
       const r = await seat('evidence', {
         rd, run: id, repo: BRIEF.repo, step: 'Phase 5 — evidence plan' + (attempt ? ' (repair)' : ''), inputs: evidenceInputs, output: out,
@@ -5948,19 +5965,22 @@ async function driveRun(id) {
       const verdict = (/__PLAN_(OK|BAD) ?([^\n]*)/.exec(c.out) || [])
       st.plan_check = verdict[1] ? verdict[1] + (verdict[2] ? ': ' + verdict[2].slice(0, 400) : '') : 'unknown: ' + c.out.slice(-200)
       if (verdict[1] !== 'BAD') break
-      extra = ' PLAN_CHECK FINDINGS (deterministic; fix every item, rewrite the whole file): ' + verdict[2].slice(0, 1200)
+      extra = ' PLAN_CHECK FINDINGS (deterministic; PATCH the existing file: fix exactly these items, keep everything else byte-identical, do not re-read inputs you already used): ' + verdict[2].slice(0, 1200)
       log(id + ' plan_check: ' + verdict[2].slice(0, 200))
     }
     if (st.evidence_plan) {
       const specDir = rd + '/spec'
+      // a deterministic repository map replaces the seat's own Glob/Grep crawl (the ccf run spent 94 tool calls and 53 min locating files)
+      await sh('cd ' + shq(BRIEF.repo || '.') + ' && { git ls-files 2>/dev/null || find . -type f -not -path "*/.git/*"; } | grep -E "\\.(py|sh|yaml|yml|json|toml|cfg|ini|md|txt)$" | grep -v -E "(^|/)(node_modules|__pycache__|\\.venv|venv|build|dist)/" | head -4000 > ' + shq(specDir + '/repo_map.txt') + '; wc -l < ' + shq(specDir + '/repo_map.txt'), lbl('repo map'), { phase: 'Evidence', timeout: 120000 })
       const specInputs = [out + '  (the evidence plan — one spec per block)', rd + '/phase4/method_view.json  (equations and steps)',
+                          specDir + '/repo_map.txt  (REPOSITORY MAP: every source file, one repo-relative path per line — locate files here instead of Glob/Grep; Read only the files you name in changes[] and run_cmd)',
                           rd + '/phase4/phase4_implementability.json  (per-step engineering notes, if present)',
                           SHARED + '/substrate.md  (file:line facts; every path is repo-relative under REPOSITORY)', SHARED + '/intake.json'].concat(brainContext('spec', id))
       const specCheck = () => sh(PY + ' - ' + shq(specDir) + ' ' + shq(BRIEF.repo) + ' ' + shq(JSON.stringify(FORBIDDEN_PATTERNS)) + ' ' + shq(rd + '/phase4/phase4_implementability.json') + ' <<\'PYEOF\'\n' + SPEC_CHECK_PY + '\nPYEOF', lbl('spec_check'), { phase: 'Evidence', timeout: 60000 })
       let extra2 = ''
       const pre2 = await specCheck(), sv = (/__SPEC_(OK|BAD) ?([^\n]*)/.exec(pre2.out) || [])
       if (sv[1] === 'OK') { st.spec = specDir; st.spec_check = 'OK (existing specs kept)' + (sv[2] ? ': ' + sv[2].slice(0, 400) : ''); log(id + ' Phase 6: existing spec/ passes spec_check — seat skipped') }
-      else if (sv[1] === 'BAD' && !/no spec\/B\*\.json|index\.json missing/.test(sv[2] || '')) extra2 = ' SPEC_CHECK FINDINGS on the existing files (deterministic; fix every item, rewrite the affected files whole): ' + (sv[2] || '').slice(0, 1200)
+      else if (sv[1] === 'BAD' && !/no spec\/B\*\.json|index\.json missing/.test(sv[2] || '')) extra2 = ' SPEC_CHECK FINDINGS on the existing files (deterministic; PATCH: open only the spec files named, fix exactly those items, keep every other file byte-identical): ' + (sv[2] || '').slice(0, 1200)
       for (let attempt = 0; attempt < 2 && !(attempt === 0 && st.spec); attempt++) {
         const r = await seat('spec', {
           rd, run: id, repo: BRIEF.repo, step: 'Phase 6 — block specs' + (attempt ? ' (repair)' : ''), inputs: specInputs,
@@ -5974,7 +5994,7 @@ async function driveRun(id) {
         const verdict = (/__SPEC_(OK|BAD) ?([^\n]*)/.exec(c.out) || [])
         st.spec_check = verdict[1] ? verdict[1] + (verdict[2] ? ': ' + verdict[2].slice(0, 400) : '') : 'unknown: ' + c.out.slice(-200)
         if (verdict[1] !== 'BAD') break
-        extra2 = ' SPEC_CHECK FINDINGS (deterministic; fix every item, rewrite the affected files whole): ' + verdict[2].slice(0, 1200)
+        extra2 = ' SPEC_CHECK FINDINGS (deterministic; PATCH: open only the spec files named in the findings, fix exactly those items, keep every other spec file byte-identical, and do not re-read the repository beyond the files the findings name): ' + verdict[2].slice(0, 1200)
         log(id + ' spec_check: ' + verdict[2].slice(0, 200))
       }
     }
@@ -6000,7 +6020,7 @@ if (finished.length >= 2) {
   let extra = ''
   const pre = await rankCheck_(), rv = (/__RANK_(OK|BAD) ?([^\n]*)/.exec(pre.out) || [])
   if (rv[1] === 'OK') { ranking = out; rankCheck = 'OK (existing ranking kept)' + (rv[2] ? ': ' + rv[2].slice(0, 400) : ''); log('Rank: existing ranking.json passes rank_check — seat skipped') }
-  else if (rv[1] === 'BAD' && !/unreadable/.test(rv[2] || '')) extra = ' RANK_CHECK FINDINGS on the existing file (deterministic; fix every item, rewrite the whole file): ' + (rv[2] || '').slice(0, 1200)
+  else if (rv[1] === 'BAD' && !/unreadable/.test(rv[2] || '')) extra = ' RANK_CHECK FINDINGS on the existing file (deterministic; PATCH: fix exactly these items, keep everything else byte-identical): ' + (rv[2] || '').slice(0, 1200)
   for (let attempt = 0; attempt < 2 && !(attempt === 0 && ranking); attempt++) {
     const r = await seat('rank', {
       rd: ROOT, run: 'all', repo: BRIEF.repo, step: 'Rank ' + finished.length + ' ideas' + (attempt ? ' (repair)' : ''), inputs: rankInputs, output: out,
@@ -6012,10 +6032,12 @@ if (finished.length >= 2) {
     const verdict = (/__RANK_(OK|BAD) ?([^\n]*)/.exec(c.out) || [])
     rankCheck = verdict[1] ? verdict[1] + (verdict[2] ? ': ' + verdict[2].slice(0, 400) : '') : 'unknown: ' + c.out.slice(-200)
     if (verdict[1] !== 'BAD') break
-    extra = ' RANK_CHECK FINDINGS (deterministic; fix every item, rewrite the whole file): ' + verdict[2].slice(0, 1200)
+    extra = ' RANK_CHECK FINDINGS (deterministic; PATCH: fix exactly these items, keep everything else byte-identical): ' + verdict[2].slice(0, 1200)
     log('rank_check: ' + verdict[2].slice(0, 200))
   }
 }
+
+await sh(PY + ' - ' + shq(ROOT + '/brain.done.json') + ' ' + shq(JSON.stringify({ runs: runs.map((r) => ({ id: r.id, state: r.state, evidence_plan: !!r.evidence_plan, spec: !!r.spec })), ranking: !!ranking })) + ' <<\'PYEOF\'\nimport json, sys, datetime\nd = json.loads(sys.argv[2]); d["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")\njson.dump(d, open(sys.argv[1], "w"), indent=1)\nprint("DONE_MARKER")\nPYEOF', 'brain.done marker', { phase: 'Rank', timeout: 30000 })   // next.py treats this file as the only proof the Brain finished (spec/index.json appears before the last repair)
 
 return {
   root: ROOT, k: K, direction: DIRECTION,

@@ -33,6 +33,8 @@ def unit_active(xid: str) -> bool | None:
 
 
 def brain_done(root: Path, k: int) -> bool:
+    """The workflow writes brain.done.json as its last step; artifacts alone are accepted only for roots finished before that marker existed."""
+    if (root / "brain.done.json").exists(): return True
     return (root / "ranking.json").exists() if k >= 2 else (root / "r1" / "spec" / "index.json").exists()
 
 
@@ -135,6 +137,10 @@ def navigate(root: Path, depth: int = 0) -> dict:
 def _navigate(root: Path) -> dict:
     args = jload(root / "args.json", {}) or {}
     k = int(args.get("k") or 1)
+    lk = brain_lock_state(root)
+    if lk["locked"] and lk["fresh"] and not (root / "brain.done.json").exists():      # a Brain is writing this root: never claim blocks under it (spec/index.json appears before the last repair)
+        return emit("BRAIN", f"Brain in flight on this root since {lk['started_at']} (last write {lk['quiet_min']} min ago) — nothing to launch, nothing to claim", wait_s=900,
+                    note=f"the running Workflow writes here; /loop 10m /exp-auto or wait; a lock quiet for {BRAIN_STALE_MIN} min counts as dead and the next call resumes from disk")
     if not brain_done(root, k):
         goal = str(args.get("goal") or "")
         if not goal.strip() or "<paste" in goal or "<fill" in goal:

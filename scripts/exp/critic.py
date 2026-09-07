@@ -62,24 +62,37 @@ def run_grok(prompt_file: Path, cwd: str, model: str, effort: str, timeout: int)
         return 127, "", str(e), cmd
 
 
-def parse_findings(text: str):
-    """the CLI wraps the model's JSON; accept the first object that carries a findings[] list."""
-    try:
-        d = json.loads(text)
-        for cand in (d, d.get("result") if isinstance(d, dict) else None, d.get("structured_output") if isinstance(d, dict) else None):
-            if isinstance(cand, dict) and isinstance(cand.get("findings"), list): return cand
-            if isinstance(cand, str):
-                try:
-                    c2 = json.loads(cand)
-                    if isinstance(c2, dict) and isinstance(c2.get("findings"), list): return c2
-                except Exception: pass
-    except Exception: pass
-    for m in re.finditer(r"\{[\s\S]*?\"findings\"[\s\S]*\}", text):
+def _json_objects(s: str) -> list:
+    """Every top-level JSON object in a string, in order (concatenated documents, no separators required)."""
+    dec, out, i = json.JSONDecoder(), [], 0
+    while True:
+        j = s.find("{", i)
+        if j < 0: return out
         try:
-            c = json.loads(m.group(0))
-            if isinstance(c.get("findings"), list): return c
-        except Exception: continue
-    return None
+            obj, end = dec.raw_decode(s, j); out.append(obj); i = end
+        except Exception:
+            i = j + 1
+
+
+def parse_findings(text: str):
+    """The grok CLI (1.0.13, --output-format json) wraps the model output in {"text": ...}; with a JSON schema the text can hold
+    SEVERAL concatenated documents — the early ones are intermediate turns with findings: [], the LAST one is the completed review.
+    Rule: among every document that carries a findings[] list (outer objects, their text / result / structured_output fields, and
+    the documents concatenated inside those strings), take the LAST one with a non-empty findings list, else the LAST one at all."""
+    cands = []
+    def visit(obj, depth=0):
+        if depth > 3: return
+        if isinstance(obj, dict):
+            if isinstance(obj.get("findings"), list): cands.append(obj)
+            for key in ("text", "result", "structured_output", "output"):
+                v = obj.get(key)
+                if isinstance(v, str):
+                    for inner in _json_objects(v): visit(inner, depth + 1)
+                elif isinstance(v, dict): visit(v, depth + 1)
+    for outer in _json_objects(text): visit(outer)
+    if not cands: return None
+    full = [c for c in cands if c.get("findings")]
+    return (full or cands)[-1]
 
 
 def main() -> int:
