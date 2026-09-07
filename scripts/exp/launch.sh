@@ -51,6 +51,20 @@ else:
 sys.exit(0 if ok else 1)
 PY
 [ "$blocked" -eq 1 ] && { echo "BLOCKED — resolve in code, never by editing the greps"; exit 2; }
+# ---- 2b. already running? (a crash between systemd-run and the ledger write leaves the unit alive and the ledger behind — record, never relaunch)
+mark_launched() {
+python3 - "$RESEARCH" "$X" "$WT" "$DIFF" <<'PY'
+import json, sys, hashlib, pathlib, datetime, os
+research, x, wt, diff = sys.argv[1:5]
+p = pathlib.Path(os.environ.get("EXP_SANDBOX") or research) / "experiments" / f"{x}.json"; d = json.loads(p.read_text()) if p.exists() else {"id": x}
+d.update({"status": "launched", "unit": f"research-{x}", "worktree": wt, "launched_at": d.get("launched_at") or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+          "diff_sha": hashlib.sha256(pathlib.Path(diff).read_bytes()).hexdigest()})
+p.write_text(json.dumps(d, indent=1))
+PY
+}
+if [ "${DRY_RUN:-0}" != 1 ] && systemctl --user is-active --quiet "research-$X" 2>/dev/null; then
+  mark_launched; echo "research-$X is already active — ledger set to launched, nothing relaunched; wait for the unit, then: /exp-verdict $X"; exit 0
+fi
 # ---- 3. GPU pre-flight
 used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$GPU" 2>/dev/null | head -1 | tr -d ' ')
 if [ -n "${used:-}" ] && [ "${DRY_RUN:-0}" != 1 ] && [ "$used" -ge 500 ]; then echo "BLOCKED: GPU $GPU busy (memory.used=${used} MiB ≥ 500)"; exit 2; fi
@@ -64,13 +78,6 @@ CMD="systemd-run --user --unit=research-$X --working-directory='$WT' -p MemoryMa
 echo "$CMD"
 if [ "${DRY_RUN:-0}" = 1 ]; then echo "DRY_RUN: not launched"; exit 0; fi
 eval "$CMD" || { echo "systemd-run failed"; exit 1; }
-python3 - "$RESEARCH" "$X" "$WT" "$DIFF" <<'PY'
-import json, sys, hashlib, pathlib, datetime, os
-research, x, wt, diff = sys.argv[1:5]
-p = pathlib.Path(os.environ.get("EXP_SANDBOX") or research) / "experiments" / f"{x}.json"; d = json.loads(p.read_text()) if p.exists() else {"id": x}
-d.update({"status": "launched", "unit": f"research-{x}", "worktree": wt, "launched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-          "diff_sha": hashlib.sha256(pathlib.Path(diff).read_bytes()).hexdigest()})
-p.write_text(json.dumps(d, indent=1))
-PY
+mark_launched
 sleep 2; systemctl --user is-active "research-$X" || true
 echo "launched research-$X — wait for the unit to end, then: /exp-verdict $X"

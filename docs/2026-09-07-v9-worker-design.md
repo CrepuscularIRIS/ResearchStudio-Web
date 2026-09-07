@@ -272,3 +272,4 @@ Brain 现在交出的契约比 §3 设想的更完整：`spec/B<k>.json`（chang
 - Brain 侧：`args.negative_anchors`（失败卡 json 路径列表）只进三席的上下文行，零新席：Phase 1（与 anomalies 同等地位的实测事实，failure_interpretation 进 residue）、2.1+2.2（硬否决：卡上机制或未回应失败原因的变体在选择前出局，composition_note 记核对了哪些卡）、3.2（硬底线：重提卡上机制 = abandon，理由 `negative_anchor:<card>`）。卡不进 4b / Phase 5 / Phase 6 / rank。mock 变体 `MOCK_NEG_ANCHORS`。
 - 导航侧：`next.py` 的 `dead(X)`（有卡即死）、`run_candidates`（rank-1 → backup_run）、`after_all_dead`（重触发或 BLOCKED）、`retrigger.json` 血统指针（`navigate` 顺着走，输出 `root` + `lineage`）；`retrigger.py` 幂等、超帽退出 3、无卡退出 3。
 - 仍未跑过：Grok 真调用；Brain 的 `spec.arms[].eval_type` 仍是 warn；K3 第二票。
+- **重复发射防护（2026-09-07 深夜）**：`brain_lock.py acquire|release` + `_common.brain_lock_state`（锁文件 + 根下最新 mtime 心跳，45 分钟无写入视为死亡）；`next.py` 对新鲜锁给 WAIT 900 s，对陈旧锁给带说明的 BRAIN；`launch.sh` 发射前查 `is-active`，已在跑就记台账退出 0。Brain 自身按产物续跑（`_shared` HAS 探测、RS navigator 从最后产物继续）。

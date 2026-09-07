@@ -1,7 +1,7 @@
 """Experiment-side tools (.research/tools/exp): precheck → build → critic/anchor_check → launch → verdict → route — scripts only, no model."""
 from __future__ import annotations
 
-import json
+import json, time
 import os
 import shutil
 import subprocess
@@ -207,9 +207,20 @@ def test_navigator_state_machine(tmp_path):
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
     # BRAIN phase: hide the spec index
     (root / "r1" / "spec" / "index.json").rename(root / "r1" / "spec" / "index.bak")
-    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["skill"] == "brain" and "brain.workflow.js" in d["run"][0]
+    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["skill"] == "brain" and any("brain.workflow.js" in c for c in d["run"])
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "<paste the ## FROZEN block here>", "k": 1}, open(root / "args.json", "w"))
     d = _nav(root, env); assert d["phase"] == "BRAIN" and d["blocked"] and "FROZEN" in d["note"]          # placeholder goal never launches the Brain
+    json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
+    # a Brain already in flight on this root: lock + heartbeat → WAIT, never a second launch; a stale lock resumes
+    r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0 and "acquired" in r.stdout, r.stdout
+    r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 3 and "IN_FLIGHT" in r.stdout, r.stdout
+    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 900 and "in flight" in d["state"] and not d["run"], d
+    old = time.time() - 3600
+    for p in root.rglob("*"):
+        if p.is_file(): os.utime(p, (old, old))
+    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 0 and "stale brain.lock" in d["note"] and "acquire" in d["run"][0] and "release" in d["run"][-1], d
+    r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0 and "stale" in r.stdout, r.stdout
+    r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); assert r.returncode == 0 and not (root / "brain.lock").exists()
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
     (root / "r1" / "spec" / "index.bak").rename(root / "r1" / "spec" / "index.json")
     # no ledger → claim the first block
@@ -262,7 +273,7 @@ def test_navigator_card_ladder(tmp_path):
     new = Path(str(root) + "-n2"); a2 = json.load(open(new / "args.json"))
     assert a2["brain_round"] == 2 and a2["parent_root"] == str(root) and len(a2["negative_anchors"]) == 2 and all(Path(c).exists() for c in a2["negative_anchors"])
     assert (new / "_shared" / "intake.json").exists() and json.load(open(root / "retrigger.json"))["next_root"] == str(new)
-    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["root"] == str(new) and d["lineage"] == [str(root)] and "brain.workflow.js" in d["run"][0] and "round 2" in d["state"], d
+    d = _nav(root, env); assert d["phase"] == "BRAIN" and d["root"] == str(new) and d["lineage"] == [str(root)] and any("brain.workflow.js" in c for c in d["run"]) and "round 2" in d["state"], d
     r = run_(sys.executable, EXP / "retrigger.py", root, env=env); assert r.returncode == 0 and "already" in r.stdout      # idempotent
     r = run_(sys.executable, EXP / "retrigger.py", new, env=env); assert r.returncode == 3                                 # cap: round 2 of 2
 

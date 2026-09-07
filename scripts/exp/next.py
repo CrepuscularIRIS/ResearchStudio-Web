@@ -12,7 +12,7 @@ A re-triggered root carries retrigger.json and navigation follows it to the new 
 import argparse, json, subprocess, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _common import BUILD, EXPERIMENTS, FAILURES, WS, jload, load_x, FIX_CAP, REIMPL_CAP
+from _common import BUILD, EXPERIMENTS, FAILURES, WS, jload, load_x, FIX_CAP, REIMPL_CAP, brain_lock_state, BRAIN_STALE_MIN
 
 TERMINAL = {"survived"}
 EXP = ".research/tools/exp"
@@ -141,10 +141,17 @@ def _navigate(root: Path) -> dict:
             return emit("BRAIN", "args.json has no FROZEN goal (empty or placeholder)", blocked=True,
                         note=f"paste the ## FROZEN block of .research/GOAL.md into {root / 'args.json'} → goal (the Brain hands it verbatim to every seat); also check repo / dataset / venue / anomalies")
         rnd = int(args.get("brain_round") or 1)
+        lk = brain_lock_state(root)
+        if lk["locked"] and lk["fresh"]:
+            return emit("BRAIN", f"Brain in flight on this root since {lk['started_at']} (last write {lk['quiet_min']} min ago) — nothing to launch", wait_s=900,
+                        note=f"another session's Workflow is writing here; /loop 10m /exp-auto or wait; a lock quiet for {BRAIN_STALE_MIN} min counts as dead and the next call resumes from disk")
+        stale = f"; stale brain.lock from {lk['started_at']} ({lk['quiet_min']} min without writes): the previous launch died — acquire replaces it and the workflow resumes from the artifacts on disk" if lk["locked"] else ""
         return emit("BRAIN", "no Brain output yet (ranking.json / r1/spec/index.json missing)" + (f" — lineage round {rnd}, {len(args.get('negative_anchors') or [])} negative anchor(s)" if rnd > 1 else ""),
                     skill="brain", skill_args=str(root / "args.json"),
-                    run=[f'Workflow({{scriptPath: ".claude/workflows/brain.workflow.js", args: <contents of {root / "args.json"}>}})'],
-                    note="run from a claude-kimi session (glm/opus/k3/astra routes); the workflow is resumable — re-run with the same args after an interruption")
+                    run=[f"python3 {EXP}/brain_lock.py {root} acquire   # exit 3 = in flight: do not launch",
+                         f'Workflow({{scriptPath: ".claude/workflows/brain.workflow.js", args: <contents of {root / "args.json"}>}})',
+                         f"python3 {EXP}/brain_lock.py {root} release   # always, whatever the Workflow returned"],
+                    note="run from a claude-kimi session (glm/opus/k3/astra routes); the workflow is resumable — finished stages are never redone, a second launch on the same root is refused by the lock" + stale)
     run = pick_run(root)
     if run is None: return after_all_dead(root, args)
     rd = root / run

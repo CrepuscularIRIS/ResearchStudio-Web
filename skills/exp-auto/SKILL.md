@@ -13,11 +13,12 @@ description: "Auto mode — the main window drives the whole pipeline (Brain wor
 4b. 失败卡之后的梯子由导航器走，不用问：ranking 的 `backup_run`（0 额度）→ 两边都死 → `retrigger.py`（新根 `<root>-n<round>`，复用 `_shared/`，`args.negative_anchors` = 本根全部失败卡）→ 超帽 BLOCKED。重触发的根带 `retrigger.json`，`/exp-auto <原根>` 自动顺着走到新根（输出里的 ROOT 行）。
 5. 同一 emit 连续三次相同 = 卡死：停，报告 `experiments/<X>.json` 与 `route.json`。
 6. Brain 阶段只在 claude-kimi 会话里发射 `Workflow`（官方 API 下 GLM/K3 id 会被静默替换）。
+7. 已经发射过的不重做：Brain 按盘上产物续跑（完成的阶段永不重跑），同一根上在跑的 Brain 由 `brain.lock` + 45 分钟心跳挡住第二次发射（导航器给 WAIT）；已在跑的 systemd 单元由 `launch.sh` 记回台账而不重发；已过的块、已领的 X、已 gate_passed 的实现都按台账跳过。
 
 环
 1. `python3 .research/tools/exp/next.py <run_root> --json`
 2. 按 `phase`：
-   - `BRAIN` 且有 `skill` → `Workflow({scriptPath: ".claude/workflows/brain.workflow.js", args: <读 <d.root>/args.json>})`（用输出里的 `root`，重触发后它不是你传入的那个），跑完回到 1。
+   - `BRAIN` 且有 `skill` → 按 `run` 的三行做：`brain_lock.py <root> acquire`（exit 3 = 已在跑：不发射，当作 WAIT）→ `Workflow({scriptPath: ".claude/workflows/brain.workflow.js", args: <读 <d.root>/args.json>})`（用输出里的 `root`，重触发后它不是你传入的那个）→ 无论返回什么都 `brain_lock.py <root> release`；回到 1。
    - `BRAIN` 且只有 `run` → 执行 `retrigger.py`（建新根 + 写 negative_anchors），回到 1。
    - `EXPERIMENT` 且有 `skill` → 用 Skill 工具调 `/<skill> <skill_args>`；做完回到 1。
    - `EXPERIMENT` 且只有 `run` → 逐条执行命令（失败即停，报告输出）；回到 1。

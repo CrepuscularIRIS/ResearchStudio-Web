@@ -105,6 +105,24 @@ def eval_rule(V: dict, keep_if_all: list):
     return ok, reasons
 
 
+BRAIN_STALE_MIN = 45   # a Brain lock with no write under the root for this long is treated as dead (Opus seats think ≤ 8 min, Phase 0 ≤ 10 min)
+
+
+def brain_lock_state(root: Path) -> dict:
+    """Is a Brain workflow in flight on this root? lock file + heartbeat (newest mtime under the root, the lock excluded)."""
+    import time
+    lock = Path(root) / "brain.lock"
+    if not lock.exists(): return {"locked": False, "fresh": False, "started_at": None, "quiet_min": None}
+    newest = 0.0
+    for p in Path(root).rglob("*"):
+        if p.is_file() and p.name != "brain.lock":
+            try: newest = max(newest, p.stat().st_mtime)
+            except OSError: pass
+    newest = max(newest, lock.stat().st_mtime)
+    quiet = (time.time() - newest) / 60
+    return {"locked": True, "fresh": quiet < BRAIN_STALE_MIN, "started_at": (jload(lock, {}) or {}).get("started_at"), "quiet_min": round(quiet, 1)}
+
+
 def canary_env_from_readme() -> dict:
     txt = (INSTRUMENTS / "README.md").read_text(encoding="utf-8") if (INSTRUMENTS / "README.md").exists() else ""
     m = re.search(r"CANARY_EXPECTED=([0-9.]+) --setenv=CANARY_TOL=([0-9.]+)", txt)
