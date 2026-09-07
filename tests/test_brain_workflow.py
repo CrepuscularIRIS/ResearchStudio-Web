@@ -1,0 +1,79 @@
+"""brain.workflow.js: one self-contained TS workflow (RS prompts inlined verbatim, logic in JS)."""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import pytest
+
+WORKSPACE = Path(__file__).resolve().parents[2]
+WORKFLOW = WORKSPACE / ".claude" / "workflows" / "brain.workflow.js"
+MOCK = Path(__file__).resolve().parent / "mock_runtime_brain.mjs"
+GEN = WORKSPACE / ".research" / "tools" / "brain_src" / "gen_brain.py"
+RS = WORKSPACE / "docs" / "refs" / "rs" / "references"
+LIMIT = 512 * 1024  # Workflow tool script cap
+
+
+def test_workflow_parses_and_fits() -> None:
+    src = WORKFLOW.read_text(encoding="utf-8")
+    assert src.startswith("export const meta = {")
+    assert len(src.encode("utf-8")) < LIMIT
+    wrapped = "(async () => {\n" + src.replace("export const meta", "const meta") + "\n})()"
+    proc = subprocess.run(["node", "--check", "-"], input=wrapped, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr[-800:]
+    for token in ("agentType", "brain.py", ".research/brain"):
+        assert token not in src  # no custom agent types, no python layer
+    seats = src[src.index("const SEATS = {"):src.index("// Route a navigator emit")]
+    assert seats.count("effort: '") == 19  # every seat pins its effort (18 RS/Brain seats + Phase 6 spec); no new seats
+
+
+def test_generator_roundtrip(tmp_path: Path) -> None:
+    """The committed workflow is exactly what the in-repo generator produces (source of truth = brain_src/)."""
+    out = tmp_path / "brain.workflow.js"
+    proc = subprocess.run(["python3", str(GEN), str(out)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert out.read_bytes() == WORKFLOW.read_bytes()
+
+
+def test_prompts_inlined_verbatim() -> None:
+    """Every bank entry (RS system prompts + references, CCF/ARIS references, Brain prompts) is byte-identical to its source file."""
+    src = WORKFLOW.read_text(encoding="utf-8")
+    # generated entries are `  key: { path: "...", text: `...` },` lines; texts are backslash-escaped template literals
+    entries = re.findall(r'^  ([a-z_0-9]+): \{ path: "([^"]+)", text: `((?:[^`\\]|\\.)*)` \},$', src, re.M | re.S)
+    assert len(entries) >= 41, len(entries)
+    keys = {k for k, _, _ in entries}
+    for name in ("bottleneck_identify", "ideate_select", "ideate_generate", "coherence_trace", "critique",
+                 "refutation_recheck", "revise", "falsification_reaudit", "expand", "derive_plain",
+                 "implementability_audit", "ccf_idea_rubric", "ccf_idea_calibration", "ccf_strict_review",
+                 "ccf_blueprint", "aris_formula_derivation", "aris_ablation_planner", "aris_compute_env",
+                 "aris_evidence_precheck", "ccf_idea_intake", "aris_experiment_plan", "ccf_evidence_design"):
+        assert name in keys, name
+    for key, path, text in entries:
+        if path.startswith("references/"):
+            source = WORKSPACE / "docs" / "refs" / "rs" / path
+        elif path.startswith("docs/refs/"):
+            source = WORKSPACE / path
+        elif path.startswith("brain/"):
+            source = WORKSPACE / ".research" / "tools" / "brain_src" / "prompts" / path.split("/", 1)[1]
+        else:
+            raise AssertionError(f"{key}: unknown path family {path}")
+        unescaped = text.replace("\\${", "${").replace("\\`", "`").replace("\\\\", "\\")
+        assert unescaped == source.read_text(encoding="utf-8"), f"{key} drifted from {source}"
+
+
+def _run_mock(env: dict[str, str]) -> None:
+    proc = subprocess.run(["node", str(MOCK)], capture_output=True, text=True, timeout=120, env={**os.environ, **env})
+    assert proc.returncode == 0, (proc.stdout[-1500:] + proc.stderr[-1500:])
+    assert "OK —" in proc.stdout
+
+
+def test_mock_runtime_happy_path() -> None:
+    _run_mock({})
+
+
+@pytest.mark.parametrize("env", [{"MOCK_VALIDATE_FAIL": "1"}, {"MOCK_DBLP_TIMEOUT": "1"}, {"MOCK_PLACEHOLDER": "1"}, {"MOCK_ASTRA_FAIL": "1"}, {"MOCK_NEG_ANCHORS": "1"}])
+def test_mock_runtime_variants(env: dict[str, str]) -> None:
+    """validate-fail repair loop, dblp circuit breaker, placeholder warning, Astra→Opus fallback on the 2.3 seat, failure cards as negative anchors (Phase 1 / ideate / 3.2 only)."""
+    _run_mock(env)

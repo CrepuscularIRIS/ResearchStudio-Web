@@ -7,7 +7,7 @@
     {
       "name": "research-harness",
       "source": ".",
-      "description": "V8: research → experiment (plan/build/judge loop) → paper, one dag.py line per turn."
+      "description": "V9: Brain workflow (idea cards + evidence plan + B1 specs) \u2192 main-window exp-* skill chain driven by next.py / /exp-auto."
     }
   ]
 }

@@ -1,7 +1,7 @@
 {
   "name": "research-harness",
-  "version": "0.3.0",
-  "description": "V8 research pipeline for Claude Code: three workflows on the native Workflow runtime — research (speculative DeepResearch with ResearchStudio transformation priors → one Claim with contract rows), experiment (adaptive plan/build/judge loop: cheapest decision-changing test, B1 spec, canary launch, deterministic invalidity ≠ refutation), paper (draft from evidence) — driven one line per turn by dag.py. Opus/Sol/K3 hold the few judgment seats, GLM does the reading and building, Grok CLI reviews code.",
+  "version": "0.4.0",
+  "description": "V9 research harness for Claude Code: one Brain workflow (ResearchStudio idea-spark spine run verbatim, 19 seats: Opus authors, GLM engineers, K3 audits, GPT-6 Astra executes the 2.3 dry-run/derivation) turns a repository + FROZEN goal into idea cards, an evidence plan and B1 specs; a main-window skill chain (exp-next \u2192 critic \u2192 build \u2192 critic \u2192 launch \u2192 verdict \u2192 handoff, Grok CLI as the read-only cross-family reviewer) runs the blocks; next.py is the navigator and /exp-auto the loop; failure cards flow back as negative anchors.",
   "author": {
     "name": "CrepuscularIRIS"
   },
@@ -9,10 +9,11 @@
   "keywords": [
     "research",
     "autoresearch",
-    "deep-research",
+    "idea-generation",
     "experiments",
     "falsification",
     "workflow",
-    "claude-code"
+    "claude-code",
+    "skills"
   ]
 }

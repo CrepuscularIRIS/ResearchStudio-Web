@@ -1,0 +1,918 @@
+                                         Contribute New Tasks：https://asibench.apexin.ai/submit
+
+
+
+                                           ASI -B ENCH : AT THE DAWN OF A RTIFICIAL S UPER I NTELLIGENCE
+
+                                                                      Website              |   § GitHub             |    õ HuggingFace                   |    Leaderboard
+
+                                                                                                                   Core Authors
+                                                                   5,†               1,†
+                                               Junwei Zhou               , Zhen Sun        , Binyu Li , Jiangyu Zhou1 , Yuexi Pan1 , Hengyu Wang1 , Honghe Ren1 , Xiaohan Jia1 ,
+                                                                                                    1
+
+                                                                                              Xueyang Zhou1 , Xiaoyu Cao1 , Yongchao Chen1,∗
+                                                                                                    †                         ∗
+arXiv:2608.17271v1 [cs.AI] 18 Aug 2026
+
+
+
+
+                                                                                                        Equal contribution.       Corresponding author.
+
+                                                                                                                    Contributors
+                                            Yuanning Feng , Junhao Wu , Cheng Zhang , Sijia Chen10 , Haoyu Xue1 , Chengsong You1 , Huan Wang1 , Koutian Wu13 ,
+                                                               1                 1                      13
+
+                                            Peigan Gao9 , Jiakun Wu1 , Wenzhe Li1 , Ergan Shang4 , Qingyuan Zheng1 , Jingjing Zhou1 , Ruixuan Jia1 , Yan Xu2 , Hongrui
+                                             Zhang7 , Xiao-Han Ma9 , Zhengxiang Cheng1 , Yuexing Hao2 , Liting Mai6 , Xianglin Ji2 , Wenjun Zhang8 , Zhuofan Chen1 ,
+                                                       Yixiao Huang1 , Chi Wang12 , Wenyue Hua11 , Yilun Hao2 , Yuantao Zhai1 , Ziyan Zhao1 , Jingyan Xie3
+                                               1
+                                                   Tsinghua University 2 Massachusetts Institute of Technology 3 Harvard University 4 Carnegie Mellon University 5 University of Michigan
+                                                6
+                                                   University of Illinois Urbana–Champaign 7 Boston University 8 University of Queensland 9 University of Science and Technology of China
+                                                                                10
+                                                                                   Flatiron Institute 11 Microsoft Research 12 AG2 AI 13 Independent Researcher
+
+
+
+
+                                         Figure 1: Overview of ASI-Bench. Left: B3 performance across agents. Right: scores from B1 to B4, where B1
+                                         provides full methods, B2 only the method name, B3 only the research goal and data, and B4 further adds distractors.
+ASI-Bench
+
+
+
+    Abstract
+
+    Artificial superintelligence (ASI) requires AI to move beyond mastering existing knowledge toward exploring the unknown,
+    creating new knowledge, and turning new ideas into verifiable results. However, the capabilities of today’s AI systems are
+    still largely built on learning, compressing, and applying existing human knowledge. Accordingly, existing benchmarks
+    primarily test whether AI can produce correct answers based on learned knowledge, or whether it can complete tasks
+    under extensive human guidance. We therefore introduce ASI-Bench, the first benchmark to jointly evaluate AI systems’
+    capabilities of innovative exploration and autonomous scientific execution across general research domains, and the first to
+    progressively withdraw human methodological guidance within the same research project to test how far AI can proceed on
+    its own. Built by over 40 experts with the cost of 31,000+ human hours, ASI-Bench contains 60 project-level research tasks
+    across 11 scientific domains and progressively reduces methodological guidance to test whether AI can independently select
+    methods, conduct research, and produce verifiable results. All tasks undergo expert review, AI-assisted auditing, sandbox
+    execution, and scorer validation. Across 18 state-of-the-art agent–model configurations, the average score drops from 50.91
+    with full methodological guidance to 29.10 with only the method specified and 26.62 when agents must determine the
+    method themselves. This sharp decline shows that current systems remain heavily dependent on human guidance and are
+    still far from autonomously conducting end-to-end, project-level scientific research. ASI-Bench is open to the world. We
+    invite researchers and builders everywhere to contribute new tasks, challenge the limits of today’s AI, and help accelerate
+    humanity’s collective path toward artificial superintelligence at https://asibench.apexin.ai/submit.
+
+
+1    Introduction
+A central challenge on the path toward artificial superintelligence (ASI) is whether AI can move beyond mastering
+existing human knowledge to explore unfamiliar problems, develop new solutions, and turn them into verifiable
+results. Today’s AI systems derive much of their capability from learning, compressing, and applying the accumulated
+knowledge of humanity, and have made rapid progress in scientific reasoning, coding, data analysis, and agentic
+execution [1, 2, 3, 4, 5, 6, 7]. Yet existing evaluations largely test these capabilities either through problems with known
+answers or through tasks whose methods and procedures are substantially specified by humans. They therefore provide
+limited evidence about whether AI can autonomously conduct scientific research when both the problem and the path to
+a solution are open-ended. In this work, we ask a more direct question: how far can current AI systems independently
+explore and execute project-level scientific research as human methodological guidance is progressively withdrawn?
+Built by over 40 experts with the cost of 31,000+ hu-
+man hours, ASI-Bench is designed to make this ques-
+tion directly measurable. It consists of 60 project-level
+research tasks across 11 scientific domains, with each
+task built around a scientific objective, task-specific
+data, an executable environment, and verifiable re-
+search artifacts. To measure autonomy, ASI-Bench
+progressively reduces methodological guidance while
+keeping the research problem and evaluation criteria un-
+changed. In B1, the system receives complete method-
+ological guidance; in B2, only the method is specified;
+in B3, the system must determine the method indepen-
+dently; and B4 introduces task-irrelevant information
+under the B3 setting to evaluate robustness. This design
+                                                          Figure 2: Performance comparison across HLE, SWE-bench,
+distinguishes following a complete procedure, trans-
+                                                          Terminal-Bench, and ASI-Bench.
+lating a specified method into an executable workflow,
+and independently conducting the research, enabling a unified assessment of general intelligence, innovation, and
+autonomous execution.
+We employ a multi-stage construction and validation process to ensure the scientific validity and evaluation reliability
+of ASI-Bench. Candidate research problems are first collected from traceable scientific sources, then screened and
+engineered into executable tasks by domain experts. Each task subsequently undergoes AI-assisted auditing and
+four rounds of human cross-review, covering scientific logic, task specifications, reference artifacts, scoring code,
+information leakage, and agent trajectories. Finally, every task is executed end-to-end in a sandbox environment
+to verify its reference solution and scoring behavior; tasks with scientific inconsistencies, unreliable evaluation, or
+unintended shortcuts are revised or excluded.
+
+
+
+                                                                 2
+ASI-Bench
+
+
+    Table 1: Comparison of representative benchmarks for evaluating capabilities toward artificial superintelligence.
+                                                                     Capabilities toward Autonomous Research
+Benchmark                 Task Setting
+                                                      Cross-domain            Method             End-to-end           Guidance
+                                                       Generality            Autonomy             Research            Gradient
+Humanity’s Last           Academic QA                      ✓                     –                   –                   –
+Exam [5]
+Terminal-Bench [7]        Terminal tasks                     –                   △                   △                    –
+ScienceAgentBench [8]     Scientific analysis                △                   △                   △                    –
+PaperBench [9]            Research replication               –                   –                   ✓                    –
+MLE-Bench [10]            ML engineering                     –                   △                   ✓                    –
+RE-Bench [11]             AI R&D                             –                   ✓                   ✓                    –
+DiscoveryBench [12]       Scientific discovery               △                   ✓                   △                    –
+SciCode [13]              Scientific coding                  ✓                   △                   –                    –
+ASI-Bench                 Project-level research             ✓                   ✓                    ✓                   ✓
+✓ denotes explicit coverage; △ denotes partial or domain-limited coverage; – denotes that the capability is not explicitly evaluated.
+
+
+Across 18 state-of-the-art Agent×Model configurations, average performance drops from 50.91 with full methodological
+guidance to 29.10 when only the method is specified and 26.62 when agents must determine the method themselves,
+revealing a substantial gap between scientific execution and autonomous discovery.
+ASI-Bench provides a common reference point for measuring the transition from AI systems that primarily learn,
+compress, and apply existing human knowledge to systems capable of general intelligence, innovation, and autonomous
+execution. By revealing how far AI systems can progress as methodological guidance is withdrawn, ASI-Bench estab-
+lishes a benchmark for tracking the emergence of capabilities that may define the dawn of artificial superintelligence.
+
+2     Benchmark Design
+2.1    Why Do We Need ASI-Bench?
+
+Existing benchmarks have pushed different dimensions of advanced AI capability substantially forward. Humanity’s
+Last Exam (HLE) [5] tests frontier knowledge across a broad range of disciplines, while SciCode [13] focuses on
+research-level scientific coding. Long-horizon agent benchmarks such as Terminal-Bench [7] evaluate whether agents
+can use tools, resolve errors, and complete complex tasks. These benchmarks provide challenging tests of knowledge
+and execution, but typically operate with predefined objectives and evaluation criteria.
+Other benchmarks focus on different components of scientific research. ScienceAgentBench [8] evaluates data-
+driven scientific analysis, DiscoveryBench [12] hypothesis-driven discovery, MLE-Bench [10] machine-learning
+engineering, and RE-Bench [11] open-ended AI R&D; PaperBench [9] focuses on research replication and computational
+reproducibility. As summarized in Table 1, these benchmarks cover different combinations of cross-domain generality,
+methodological autonomy, and end-to-end execution, each capturing an important dimension of advanced intelligence.
+What remains missing is a benchmark that evaluates these dimensions jointly. ASI-Bench uses cross-domain project-
+level research to evaluate general intelligence, independent method selection to evaluate innovation, and end-to-end
+completion to evaluate autonomous execution. Its B1–B3 guidance gradient further measures whether these capabilities
+persist as human methodological guidance is progressively withdrawn. Together, these dimensions provide a more
+complete evaluation of intelligence than any individual capability alone.
+
+2.2    How Is ASI-Bench Designed?
+
+ASI-Bench consists of 60 project-level research tasks across 11 scientific domains, designed to evaluate how far AI can
+conduct scientific research as human methodological guidance is progressively withdrawn. Each project is evaluated
+under matched guidance conditions while keeping the underlying task, data, required outputs, and scoring criteria fixed.
+
+Autonomous Research with Reduced Human Guidance. Each task in ASI-Bench is designed as a complex,
+project-level scientific investigation rather than an isolated question or a task with a predefined solution path. Starting
+from a research objective and task-specific data, agents must carry out a long-horizon, multi-stage research process
+
+
+                                                                 3
+ASI-Bench
+
+
+
+
+Figure 3: Representative project-level tasks in ASI-Bench across physics, astronomy, electrical engineering, and
+computer science.
+
+that spans problem understanding, method selection, implementation, experimentation, failure diagnosis, iterative
+refinement, and result validation, ultimately producing verifiable scientific artifacts. Across the 60 tasks, completing
+these research processes involves more than 2,600 interaction turns and 2,400 execution steps, spanning over 35 hours
+of agent execution. Beyond their length, the tasks contain multiple interdependent and open-ended decision points:
+agents may need to choose among alternative methods, interpret intermediate results, recover from failed attempts,
+and revise subsequent actions accordingly. ASI-Bench therefore evaluates sustained end-to-end scientific investigation
+rather than isolated question answering or the execution of a fixed procedure.
+To measure scientific autonomy, ASI-Bench progressively reduces human methodological guidance while keeping the
+research objective, data, and evaluation criteria fixed. A representative example is provided in Appendix D, where
+the same nonlinear two-dimensional dynamical system task is presented under B1–B4. In B1, the governing PDE,
+numerical formulation, and solver procedure are explicitly provided, where the agent mainly needs to implement and
+execute the prescribed approach. In B2, the full procedure is removed. The agent is only given methodological guidance
+about the class of PDE and suitable numerical approaches, and must turn this information into a working solution. In B3,
+even this methodological guidance is removed. The agent receives only the observed spatio-temporal data, the scientific
+objective, and the required outputs. It must determine the underlying model, choose an appropriate numerical method,
+implement it, and validate the resulting prediction. B4 retains the B3 setting but adds plausible yet task-irrelevant
+information, testing whether the agent can maintain its research direction under distraction. This progression shifts
+scientific responsibility from humans to AI, from executing a prescribed procedure to independently deciding how the
+research should be conducted.
+
+Broad Scientific Coverage. ASI-Bench contains 60 project-level research tasks spanning 11 scientific domains:
+mathematics, physics, chemistry, biology, astronomy, materials science, earth science, medicine and biostatistics,
+computer science, robotics, and electrical engineering. These domains cover fundamental science, life science,
+computing, and engineering, requiring the same Agent×Model system to generalize across different data types,
+scientific methods, and validation criteria. This breadth tests whether autonomous research transfers across disciplines
+rather than remaining limited to a single domain or familiar workflow.
+
+Rigorous Construction and Validation. ASI-Bench is built through a large-scale, iterative process rather than
+a single-pass collection. As shown in Figure 3, the process begins with more than 1,300 candidate research ideas
+collected from scientific sources. These candidates are repeatedly reviewed, revised, or removed before entering the
+benchmark. The construction process includes five review rounds, more than 1,100 review assignments, and over 2,000
+task revisions. Reviewers examine the scientific formulation, task specification, B1–B4 information design, reference
+results, and evaluation criteria. They also check for information leakage and unintended shortcuts that could lead
+to high scores without correctly solving the task. Across this construction and validation process, more than 31,000
+human-hours were invested. Each retained task is further validated through end-to-end execution in isolated sandboxes.
+Across development, more than 1,500 sandbox runs are conducted to verify runtime stability, reference reproducibility,
+artifact generation, and scoring consistency. Tasks with unresolved scientific errors, unstable execution, evaluation
+misalignment, or unintended solution paths are revised or excluded. After this process, 60 project-level tasks spanning
+11 scientific domains remain in the final benchmark.
+
+
+
+
+                                                           4
+ASI-Bench
+
+
+2.3   When Should ASI-Bench Be Used?
+
+To demonstrate stronger intelligence. Improvements of several percentage points on conventional benchmarks do
+not necessarily indicate progress in higher-order intelligence, especially when the problems, answers, or solution
+procedures are already well specified. Improvements on ASI-Bench, particularly under low-guidance conditions where
+the system must determine how to approach the research problem itself, provide stronger evidence of progress in general
+intelligence, innovation, and autonomous execution. New foundation models, reasoning models, research agents, and
+general-purpose agents can therefore use ASI-Bench to demonstrate advances beyond knowledge recall or procedure
+following.
+To test autonomous research. ASI-Bench is particularly suitable for systems claiming capabilities in AI for Science,
+AI Scientist, automated research, or highly challenging tasks. By progressively removing methodological guidance,
+it tests whether a system can continue a research project when a complete human-designed procedure is no longer
+provided. The evaluation can further reveal whether failures arise from insufficient knowledge, method selection, tool
+execution, result interpretation, error correction, or stability.
+To compare models and agents. Different backbone models can be evaluated within the same agent framework, while
+the same model can be paired with different agents or harnesses to measure the contribution of system design. This
+allows researchers to distinguish improvements from the backbone model itself from those introduced by the agent
+design, and to identify under which guidance levels, scientific domains, and research stages the gains occur.
+To measure frontier progress. Current performance on ASI-Bench remains low: across 18 state-of-the-art
+Agent×Model configurations, the average B3 score is only 26.62. The benchmark is therefore far from saturated and
+retains substantial room to distinguish future systems. Significant and reproducible gains, particularly under minimal
+methodological guidance, can provide a clear signal of progress toward more autonomous and higher-order intelligence.
+ASI-Bench can thus serve as a public evaluation and leaderboard for teams seeking to demonstrate such advances.
+To expand the benchmark together. ASI-Bench is intended to grow with the scientific and AI communities.
+Researchers working at the frontier of different fields are often best positioned to identify research problems that are
+both scientifically meaningful and sufficiently challenging. We therefore invite scientists, engineers, model teams, agent
+developers, and benchmark researchers to contribute new problems, tasks, evaluation methods, and verified results,
+helping ASI-Bench remain challenging and relevant as AI capabilities advance.
+
+3     Experiments
+3.1   Main Results
+
+We evaluate 18 representative Agent×Model configurations on 60 tasks in ASI-Bench. Table 2 reports their scores
+under B1–B4 together with the overall average.
+
+Scientific Autonomy Remains Limited. Current systems remain far from reliable autonomous scientific discovery.
+Even the strongest configuration, Codex with GPT-5.6 Sol (ultra), achieves a B3 score of only 51.60 and is the sole
+evaluated system to exceed 50 when agents must independently select methods and construct research workflows.
+Stronger inference-time reasoning does improve this capability: increasing GPT-5.6 Sol from xhigh to ultra raises the
+B3 score from 40.86 to 51.60, a gain of 10.74 points. Yet this improvement also underscores how difficult scientific
+autonomy remains: substantial additional reasoning is required merely to reach moderate performance under reduced
+human guidance. The central challenge, therefore, is not simply whether AI can execute a research procedure once
+it is specified, but whether it can determine what procedure should be pursued in the first place. This distinction is
+critical for progress toward genuinely autonomous scientific research, where systems must move beyond following
+human-designed methodologies toward independently formulating, testing, and refining their own research strategies.
+
+Dependence on Detailed Methodological Guidance. The results suggest that the main bottleneck is not method
+selection itself, but the ability to turn a scientific method into a complete research procedure. Average performance
+drops sharply from 50.91 in B1 to 29.10 in B2, a decrease of 21.82 points, when the detailed procedure is removed
+but the method remains available. By comparison, removing the method itself in B3 causes only a further 2.48-point
+drop, from 29.10 to 26.62. This large asymmetry indicates that current systems benefit far more from step-by-step
+methodological guidance than from being told which method to use. Performance remains nearly unchanged in B4
+(26.99 versus 26.62 in B3), further showing that irrelevant contextual information has little effect relative to the loss
+of procedural guidance. Together, these results identify method operationalization, rather than method selection or
+distraction, as the primary bottleneck to autonomous scientific research.
+
+
+                                                            5
+ASI-Bench
+
+
+Table 2: Main results on 60 project-level tasks without external tool access. Scores are macro-averaged over tasks
+and, unless otherwise specified, over three independent runs. Gray rows report ± one sample standard deviation across
+independent runs. The last three columns report B2−B1, B3−B1, and B4−B3, respectively, with differences computed
+independently for each run before aggregation. Bold values indicate the column-wise maximum result.
+
+                                                        Scientific Score                                  Diagnostic Metrics
+Harness         Backbone Model                                                            Overall
+                                            B1          B2          B3           B4                    B2−B1   B3−B1      B4−B3
+                GPT-5.5 (xhigh)            57.57       35.28       29.29       30.46        38.15      −22.29      −28.27       +1.16
+                ± std.                     ±5.74       ±2.23       ±1.57       ±1.55        ±1.25       ±7.37       ±5.26       ±3.10
+                GPT-5.6 Sol (xhigh)        62.75       42.96       40.86       40.74        46.83      −19.79      −21.89       −0.12
+Codex           ± std.                     ±3.05       ±1.59       ±2.35       ±1.77        ±1.10       ±1.48       ±5.27       ±3.66
+                GPT-5.6 Sol (ultra)        71.78       49.57       51.60       50.41        55.84      −22.21      −20.18       −1.20
+                ± std.                     ±0.46       ±2.31       ±3.65       ±3.06        ±1.58       ±1.90       ±3.21       ±5.68
+
+                Claude Opus 5†             72.29       45.80       40.70       42.39        50.29      −26.49      −31.59       +1.69
+                         single run          –           –             –          –           –           –            –          –
+                Kimi K3                    55.79       35.24       27.78       29.57        37.09      −20.55      −28.02       +1.79
+                ± std.                     ±4.86       ±3.36       ±2.02       ±0.46        ±1.74       ±3.88       ±5.64       ±2.33
+                Claude Opus 4.8            52.48       36.25       31.73       29.59        37.51      −16.24      −20.76       −2.14
+                ± std.                     ±6.27       ±4.57       ±3.44       ±1.51        ±0.79       ±9.26       ±8.71       ±4.46
+                GLM-5.3                    63.05       35.45       33.09       35.01        41.65      −27.60      −29.96       +1.92
+                ± std.                     ±1.40       ±3.76       ±1.36       ±3.40        ±1.35       ±4.61       ±1.30       ±4.74
+                GLM-5.2                    54.01       30.81       30.29       27.27        35.59      −23.20      −23.72       −3.02
+                ± std.                     ±1.65       ±2.25       ±1.96       ±3.98        ±0.95       ±2.54       ±3.56       ±2.04
+Claude Code DeepSeek V4 Flash              51.85       26.49       24.84       24.41        31.90      −25.36      −27.01       −0.43
+                ± std.                     ±1.71       ±1.24       ±2.21       ±0.95        ±0.47       ±0.82       ±3.56       ±1.28
+                Kimi K2.7                  44.43       23.84       19.75       21.34        27.34      −20.59      −24.68       +1.58
+                ± std.                     ±1.90       ±0.40       ±0.74       ±2.26        ±0.61       ±2.29       ±2.07       ±2.99
+                MiniMax M3                 43.53       20.86       20.61       21.21        26.55      −22.68      −22.92       +0.60
+                ± std.                     ±3.60       ±3.29       ±1.02       ±2.85        ±1.55       ±2.31       ±3.20       ±3.87
+                DeepSeek V4 Pro            42.97       18.79       19.20       18.94        24.98      −24.18      −23.77       −0.26
+                ± std.                     ±0.46       ±2.88       ±0.22       ±1.23        ±0.57       ±2.61       ±0.68       ±1.28
+                MiMo V2.5 Pro              41.70       18.49       16.49       16.33        23.25      −23.22      −25.21       −0.16
+                ± std.                     ±1.63       ±2.27       ±0.07       ±0.39        ±1.05       ±1.20       ±1.56       ±0.31
+
+                Kimi K3                    56.16       34.05       28.15       26.53        36.22      −22.11      −28.01       −1.62
+                ± std.                     ±4.86       ±5.08       ±0.84       ±0.99        ±2.22       ±2.34       ±4.56       ±1.45
+Kimi Code       Kimi K2.7                  29.99       17.01       15.65       16.22        19.72     −12.98       −14.34       +0.58
+                ± std.                     ±3.30       ±0.10       ±1.34       ±0.85        ±1.19       ±3.35       ±1.98       ±1.56
+
+                MiMo V2.5 Pro              27.73       11.33       11.50       14.11        16.17      −16.40      −16.24       +2.61
+MiMo Code       ± std.                     ±4.33       ±1.40       ±1.36       ±3.19        ±1.39       ±5.40       ±5.37       ±4.11
+
+                DeepSeek V4 Flash          50.60       24.89       21.91       24.99        30.60      −25.71      −28.69       +3.09
+                ± std.                     ±2.24       ±5.27       ±1.75       ±4.27        ±3.05       ±3.27       ±1.53       ±4.43
+OpenHands       DeepSeek V4 Pro            37.78       16.66       15.78       16.28        21.63      −21.12      −22.00       +0.50
+                ± std.                     ±2.28       ±2.84       ±1.91       ±2.52        ±0.75       ±3.00       ±3.42       ±4.31
+
+ All Models (Mean)                         50.91       29.10       26.62       26.99        33.41      −21.82      −24.29       +0.36
+ Gray rows report ± one sample standard deviation across independent runs. For the diagnostic metrics, differences are first computed
+within each run and their standard deviations are then calculated across runs.
+†
+  This result is obtained from a single run; therefore, its standard deviation cannot be estimated. All other results report the mean and
+standard deviation over three independent runs.
+
+Harnesses Shape Model’s Capability. The harness can substantially change the capability expressed by the same
+underlying model. MiMo V2.5 Pro, for example, improves from 16.17 with MiMo Code to 23.25 with Claude Code,
+while Kimi K2.7 rises from 19.72 with Kimi Code to 27.34 with Claude Code. However, this effect is not uniform:
+Kimi K3 shows only a small difference between Kimi Code and Claude Code (36.22 vs. 37.09). These results show that
+scientific capability cannot be attributed to the backbone model alone; it emerges from the interaction between the model
+and the harness through which it reasons, executes, and organizes research. This has an important implication for both
+evaluation and system design: comparing models without accounting for their harnesses can obscure where capability
+actually comes from, while progress toward autonomous scientific research may depend as much on improving the
+surrounding research system as on scaling the model itself.
+
+3.2   Computational Cost
+
+Figure 4 reports the average token consumption and execution time under different levels of methodological guidance,
+together with the cost profiles of individual Agent×Model combinations.
+
+
+                                                                   6
+ASI-Bench
+
+
+
+
+                         Opus 4.8   DeepSeek V4 Pro                           GLM-5.2    Kimi K2.7                  MiMo V2.5 Pro           GPT-5.5 xhigh     GPT-5.6 Ultra
+                         Opus 5     DeepSeek V4 Flash                         GLM-5.3    Kimi K3                    MiniMax M3              GPT-5.6 xhigh
+                                            Claude Code                         Codex    OpenHands                       Kimi Code         MiMo Code
+                 (a) Token Cost                                          (b) Time Cost                              (c) Cost vs. Performance
+                         8      +59%                                     60
+                                                                                 +32%                               50
+Avg. Tokens / Task (M)
+
+
+
+
+                                                Avg. Time / Task (min)
+                                                                         50          +22%+18%
+                         6          +25%+30%                                                                        40
+
+
+
+
+                                                                                                     B3 Score (%)
+                                                                         40
+                         4                                               30                                         30
+                                6.9M
+
+
+
+
+                                                                                49.7
+                                                                               45.9
+                                                                               44.5
+                              5.7M
+                              5.4M
+
+
+                                                                                                                    20
+                                                                              37.8
+                                                                         20
+                             4.4M
+
+
+
+
+                         2
+                                                                         10                                         10
+                         0                                                0                                          0
+                             B1 B2 B3 B4                                      B1 B2 B3 B4                                0           800        1600        2400     3200
+                                                                                                                                               Cost ($)
+Figure 4: Computational cost under different levels of methodological guidance and cost–performance trade-offs
+across Agent×Model combinations. (a–b) Average per-task token consumption and execution time under B1–B4. (c)
+Relationship between per-run monetary cost and B3 scientific score across evaluated systems. Colors denote backbone
+models, while marker shapes denote agent harnesses.
+
+Complete Guidance Reduces Compute Cost. Computational cost depends not only on how much methodological
+guidance is provided, but also on how complete that guidance is. B1, which specifies the method, implementation
+steps, and parameter choices, is the least expensive setting, requiring only 4.35M tokens and 37.8 minutes per task
+on average. Removing this procedural guidance increases the cost substantially: B3 and B4 consume 25% and 30%
+more tokens than B1 and require 22% and 18% more execution time, respectively, reflecting the additional exploration
+and iteration needed when agents must determine how to conduct the research themselves. More strikingly, B2 is the
+most expensive setting, requiring 6.91M tokens and 49.7 minutes per task—59% more tokens and 32% more time
+than B1. Providing only the method name therefore does not necessarily simplify research; instead, it can leave agents
+constrained by a prescribed direction while still requiring them to reconstruct the missing procedural details. This result
+reveals an important asymmetry in human guidance: complete guidance can sharply reduce search and implementation
+cost, whereas incomplete guidance may introduce additional overhead.
+
+Higher Cost Does Not Guarantee Better Performance. Scientific performance varies substantially across configura-
+tions with similar or even very different computational budgets. Codex with GPT-5.6 xhigh achieves a B3 score of
+40.86% at approximately $684 per run, closely matching Claude Opus 5 with Claude Code at 40.70%, despite costing
+only about one quarter as much as its $2,728 per-run cost. Spending more can still improve absolute performance:
+Codex with GPT-5.6 Ultra reaches the highest B3 score of 51.60% at approximately $1,550 per run. However, the large
+cost differences among configurations with comparable performance show that additional spending does not translate
+directly into stronger scientific capability. For practical autonomous research, system selection therefore involves a
+clear trade-off: GPT-5.6 xhigh offers the strongest cost–performance balance, whereas GPT-5.6 Ultra is preferable
+when maximizing scientific performance matters more than efficiency.
+
+4                        Conclusion
+Beyond a single leaderboard, ASI-Bench is intended to serve as shared research infrastructure for the scientific and
+AI communities. Its B1–B4 structure and domain-level analyses enable controlled comparisons across models and
+agents, while revealing where progress occurs and where human methodological guidance remains necessary. Yet no
+fixed benchmark—and no single research team—can fully represent the breadth of difficult, meaningful, and verifiable
+problems that future AI systems must confront. The continued value of ASI-Bench therefore depends on collective
+participation from researchers working across disciplines and at the frontier of model development.
+We invite scientists, engineers, model teams, agent researchers, and benchmark developers around the world to contribute
+research problems, executable tasks, evaluation methods, reviews, and verified results; to test new systems against
+the benchmark; and to challenge the benchmark itself as AI capabilities advance. By building ASI-Bench as an open,
+
+
+                                                                                            7
+ASI-Bench
+
+
+rigorous, and continually evolving community standard, we can establish a shared foundation for identifying genuine
+advances in intelligence—and collectively accelerate progress toward artificial superintelligence.
+
+References
+ [1] Qian Huang, Jian Vora, Percy Liang, and Jure Leskovec. MLAgentBench: Evaluating language agents on machine
+     learning experimentation. In Proceedings of the 41st International Conference on Machine Learning, volume 235
+     of Proceedings of Machine Learning Research, pages 20271–20309, 2024.
+ [2] Ruochen Li, Teerth Patel, Qingyun Wang, and Xinya Du. MLR-Copilot: Autonomous machine learning research
+     based on large language models agents. arXiv preprint arXiv:2408.14033, 2024.
+ [3] Samuel Schmidgall, Yusheng Su, Ze Wang, Ximeng Sun, Jialian Wu, Xiaodong Yu, et al. Agent laboratory: Using
+     llm agents as research assistants. In Findings of the Association for Computational Linguistics: EMNLP 2025,
+     pages 5977–6043, 2025.
+ [4] Jiakang Yuan, Xiangchao Yan, Bo Zhang, Tao Chen, Botian Shi, Wanli Ouyang, Yu Qiao, Lei Bai, and Bowen Zhou.
+     Dolphin: Moving towards closed-loop auto-research through thinking, practice, and feedback. In Proceedings
+     of the 63rd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), pages
+     21768–21789, 2025.
+ [5] Center for AI Safety, Scale AI, and HLE Contributors Consortium. A benchmark of expert-level academic
+     questions to assess AI capabilities. Nature, 649:1139–1146, 2026.
+ [6] Xiang Deng, Jeff Da, Edwin Pan, Yannis Yiming He, Charles Ide, Kanak Garg, Niklas Lauffer, Andrew Park,
+     Nitin Pasari, Chetan Rane, Karmini Sampath, Maya Krishnan, Srivatsa Kundurthy, Sean Hendryx, Zifan Wang,
+     Chen Bo Calvin Zhang, Noah Jacobson, Bing Liu, and Brad Kenstler. SWE-Bench Pro: Can AI agents solve
+     long-horizon software engineering tasks? arXiv preprint arXiv:2509.16941, 2025.
+ [7] Mike A. Merrill, Alexander G. Shaw, Nicholas Carlini, Boxuan Li, Harsh Raj, Ivan Bercovich, Lin Shi, Jeong Yeon
+     Shin, Thomas Walshe, E. Kelly Buchanan, et al. Terminal-Bench: Benchmarking agents on hard, realistic tasks in
+     command line interfaces. arXiv preprint arXiv:2601.11868, 2026.
+ [8] Ziru Chen, Shijie Chen, Yuting Ning, Qianheng Zhang, Boshi Wang, Botao Yu, et al. Scienceagentbench: Toward
+     rigorous assessment of language agents for data-driven scientific discovery. arXiv preprint arXiv:2410.05080,
+     2024.
+ [9] Giulio Starace, Oliver Jaffe, Dane Sherburn, James Aung, Jun Shern Chan, Leon Maksin, et al. Paperbench:
+     Evaluating ai’s ability to replicate ai research. arXiv preprint arXiv:2504.01848, 2025.
+[10] Jun Shern Chan, Neil Chowdhury, Oliver Jaffe, James Aung, Dane Sherburn, Evan Mays, et al. MLE-bench:
+     Evaluating machine learning agents on machine learning engineering. arXiv preprint arXiv:2410.07095, 2024.
+[11] Hjalmar Wijk, Tao Lin, Joel Becker, Sami Jawhar, Neev Parikh, Thomas Broadley, et al. RE-Bench: Evaluating
+     frontier AI R&D capabilities of language model agents against human experts. arXiv preprint arXiv:2411.15114,
+     2024.
+[12] Bodhisattwa Prasad Majumder, Harshit Surana, Dhruv Agarwal, Bhavana Dalvi Mishra, Abhijeetsingh Meena,
+     Aryan Prakhar, et al. DiscoveryBench: Towards data-driven discovery with large language models. arXiv preprint
+     arXiv:2407.01725, 2024.
+[13] Minyang Tian, Luyu Gao, Shizhuo Dylan Zhang, Xinan Chen, Cunwei Fan, Xuefei Guo, et al. SciCode: A
+     research coding benchmark curated by scientists. arXiv preprint arXiv:2407.13168, 2024.
+[14] Andres M. Bran, Sam Cox, Oliver Schilter, Carlo Baldassari, Andrew D. White, and Philippe Schwaller. Aug-
+     menting large language models with chemistry tools. Nature Machine Intelligence, 6:525–535, 2024.
+[15] Daniil A. Boiko, Robert MacKnight, Ben Kline, and Gabe Gomes. Autonomous chemical research with large
+     language models. Nature, 624:570–578, 2023.
+[16] Chris Lu, Cong Lu, Robert Tjarko Lange, Jakob Foerster, Jeff Clune, and David Ha. The AI scientist: Towards
+     fully automated open-ended scientific discovery. arXiv preprint arXiv:2408.06292, 2024.
+[17] Yutaro Yamada, Robert Tjarko Lange, Cong Lu, Shengran Hu, Chris Lu, Jakob Foerster, Jeff Clune, and David
+     Ha. The AI scientist-v2: Workshop-level automated scientific discovery via agentic tree search. arXiv preprint
+     arXiv:2504.08066, 2025.
+[18] Juraj Gottweis, Wei-Hung Weng, Alexander Daryin, Tao Tu, Petar Sirkovic, Artiom Myaskovsky, et al. Accelerat-
+     ing scientific discovery with Co-Scientist. Nature, 655:487–496, 2026.
+
+
+                                                         8
+ASI-Bench
+
+
+[19] Ludovico Mitchener, Angela Yiu, Benjamin Chang, Mathieu Bourdenx, Tyler Nadolski, Arvis Sulovari, et al.
+     Kosmos: An AI scientist for autonomous discovery. arXiv preprint arXiv:2511.02824, 2025.
+[20] Chris Lu, Cong Lu, Robert Tjarko Lange, Yutaro Yamada, Shengran Hu, Jakob Foerster, David Ha, and Jeff Clune.
+     Towards end-to-end automation of AI research. Nature, 651:914–919, 2026.
+[21] David Rein, Betty Li Hou, Asa Cooper Stickland, Jackson Petty, Richard Yuanzhe Pang, Julien Dirani, Julian
+     Michael, and Samuel R. Bowman. GPQA: A graduate-level google-proof Q&A benchmark. arXiv preprint
+     arXiv:2311.12022, 2023.
+[22] Ken Gu, Ruoxi Shang, Ruien Jiang, Keying Kuang, Richard-John Lin, Donghe Lyu, et al. BLADE: Benchmarking
+     language model agents for data-driven science. arXiv preprint arXiv:2408.09667, 2024.
+[23] Liqiang Jing, Zhehui Huang, Xiaoyang Wang, Wenlin Yao, Wenhao Yu, Kaixin Ma, et al. DSBench: How far are
+     data science agents from becoming data science experts? arXiv preprint arXiv:2409.07703, 2024.
+[24] Haokun Liu, Sicong Huang, Jingyu Hu, Yangqiaoyu Zhou, and Chenhao Tan. Hypobench: Towards systematic
+     and principled benchmarking for hypothesis generation. arXiv preprint arXiv:2504.11524, 2025.
+[25] Zachary S. Siegel, Sayash Kapoor, Nitya Nadgir, Benedikt Stroebl, and Arvind Narayanan. Core-bench: Fostering
+     the credibility of published research through a computational reproducibility agent benchmark. arXiv preprint
+     arXiv:2409.11363, 2024.
+[26] Christine Ye, Sihan Yuan, Suchetha Cooray, Steven Dillmann, Ian L. V. Roque, Dalya Baron, et al. Replication-
+     Bench: Can AI agents replicate astrophysics research papers? arXiv preprint arXiv:2510.24591, 2025.
+[27] Zhen Wang, Fan Bai, Zhongyan Luo, Jinyan Su, Kaiser Sun, Xinle Yu, et al. Fire-bench: Evaluating agents on the
+     rediscovery of scientific insights. arXiv preprint arXiv:2602.02905, 2026.
+[28] Wanghan Xu, Shuo Li, Tianlin Ye, Qinglong Cao, Yixin Chen, Hengjian Gao, et al. ResearchClawBench: A
+     benchmark for end-to-end autonomous scientific research. arXiv preprint arXiv:2606.07591, 2026.
+[29] Tianyu Liu, Allen Xin Wang, Antonia Panescu, Lisa Xinyi Chen, Wenxin Long, Xinyu Wei, Yueqian Jing,
+     Ziyao Zeng, et al. Benchmarking AI agents for addressing scientific challenges across scales. arXiv preprint
+     arXiv:2606.12736, 2026. SciAgentArena.
+[30] Peter Jansen, Marc-Alexandre Côté, Tushar Khot, Erin Bransom, Bhavana Dalvi Mishra, Bodhisattwa Prasad
+     Majumder, et al. DISCOVERYWORLD: A virtual environment for developing and evaluating automated scientific
+     discovery agents. arXiv preprint arXiv:2406.06769, 2024.
+[31] Jonathan Bragg, Mike D’Arcy, Nishant Balepur, Dan Bareket, Bhavana Dalvi, Sergey Feldman, et al. Astabench:
+     Rigorous benchmarking of ai agents with a scientific research suite. arXiv preprint arXiv:2510.21652, 2025.
+[32] Qiushi Sun, Zhoumianze Liu, Chang Ma, Zichen Ding, Fangzhi Xu, Zhangyue Yin, et al. Scienceboard: Evaluating
+     multimodal autonomous agents in realistic scientific workflows. arXiv preprint arXiv:2505.19897, 2025.
+[33] A. Lew, Y. Cao, and Markus J. Buehler. Projectionbench: Evaluating scientific hypothesis generation in llms
+     under progressive information disclosure. arXiv preprint arXiv:2605.30284, 2026.
+[34] Kaiyuan Liu, Youcheng Pan, Yang Xiang, Daojing He, Jing Li, Yexing Du, and Tianrun Gao. ProjectEval: A
+     benchmark for programming agents automated evaluation on project-level code generation. In Findings of the
+     Association for Computational Linguistics: ACL 2025, pages 20205–20221, 2025.
+
+
+
+
+                                                        9
+ASI-Bench
+
+
+A     Related Work
+AI Scientist Systems AI scientist systems combine language models with planning, retrieval, code execution,
+and scientific tools to automate increasingly complete research workflows [14, 15, 16]. Coscientist demonstrated
+tool-augmented planning and experimentation in chemistry [15], while The AI Scientist integrated idea generation,
+implementation, experimentation, visualization, writing, and review in machine-learning research [16]. The AI Scientist-
+v2 further reduced its reliance on human-provided templates through experiment management and agentic tree search
+[17]. More recent systems, such as Co-Scientist and Kosmos, extend this direction toward collaborative hypothesis
+generation and long-horizon scientific investigation [18, 19]. Although these systems demonstrate broad workflow
+capabilities, their success does not necessarily indicate scientific autonomy, as objectives, methods, or experimental
+procedures may already be specified by humans [16, 20]. This motivates evaluations that distinguish autonomous
+workflow construction from reliable execution of provided methodology [8, 9].
+
+Benchmarks for Scientific Agents Scientific-agent evaluation has progressed from knowledge-based tests to exe-
+cutable research tasks. GPQA and Humanity’s Last Exam assess advanced scientific knowledge without requiring data
+analysis or code execution [21, 5]. SciCode evaluates scientific programming [13], while DiscoveryBench, BLADE, DS-
+Bench, and HypoBench focus on data-driven discovery and hypothesis generation [12, 22, 23, 24]. These benchmarks
+target important capabilities but cover only selected stages of scientific research. More recent benchmarks evaluate
+longer workflows. ScienceAgentBench assesses data-driven scientific programming and execution [8]. MLE-Bench
+and RE-Bench evaluate open-ended machine-learning research engineering [10, 11], while PaperBench, CORE-Bench,
+and ReplicationBench measure research replication through hierarchical artifact-based or execution-based evaluation
+[9, 25, 26]. FIRE-Bench and ResearchClawBench extend evaluation toward full-cycle rediscovery and end-to-end
+scientific research [27, 28], and SciAgentArena introduces interactive cross-domain tasks with stepwise verification [29].
+DiscoveryWorld, AstaBench, and ScienceBoard further expand evaluation toward simulated, suite-based, and realistic
+multimodal scientific workflows [30, 31, 32]. These benchmarks improve realism, execution depth, and outcome
+verifiability. However, most provide each task under a fixed specification. Their scores therefore show whether an
+agent completes the assigned workflow, but not whether the workflow was independently constructed or derived from
+supplied methodology [12, 8, 9, 25].
+
+Scientific Autonomy and Guidance Dependence Several benchmarks vary the information available to a model.
+ScienceAgentBench compares performance with and without expert-provided knowledge, but its largely binary design
+does not distinguish method selection from procedural guidance [8]. ProjectionBench progressively reveals scientific
+information, yet focuses on hypothesis generation rather than executable project-level workflows [33]. ProjectEval
+varies specification detail for software projects [34], while contextual-robustness benchmarks examine sensitivity
+to irrelevant information. However, none evaluates how agents transition from following a prescribed method to
+independently constructing and validating a workflow within the same scientific project, or how this ability is affected
+by plausible distractors. ASI-Bench fills this gap through matched project instances that keep the research objective,
+data, required outputs, and evaluation criteria fixed while progressively withdrawing methodological guidance. Its
+four levels disentangle procedural execution, method identification, autonomous workflow construction, and distractor
+robustness, thereby directly measuring agents’ dependence on human-provided methodology.
+
+B     Authors
+ASI-Bench is a collaborative benchmark built through broad participation in scientific task construction and independent
+expert review. The final benchmark contains 60 project-level research tasks spanning 11 scientific domains. In total,
+21 researchers contributed tasks retained in the final benchmark. These tasks further underwent five rounds of human
+review, resulting in more than 1,100 task-review assignments and repeated revisions throughout benchmark construction.
+Task contributors are ordered primarily by the number of tasks retained in the final benchmark.
+
+B.1   Task Contributors
+
+The following researchers contributed scientific tasks retained in the final ASI-Bench benchmark.
+Yuexi Pan1 , Hengyu Wang1 , Honghe Ren1 , Peigan Gao9 , Jiangyu Zhou1 , Sijia Chen10 , Junhao Wu1 , Huan Wang1 ,
+Koutian Wu13 , Cheng Zhang13 , Yuanning Feng1 , Qingyuan Zheng1 , Wenzhe Li1 , Jiakun Wu1 , Ruixuan Jia1 , Junwei
+Zhou5 , Ergan Shang4 , Jingjing Zhou1 , Yan Xu2 , Hongrui Zhang7 , and Liting Mai6 .
+
+
+
+
+                                                           10
+ASI-Bench
+
+
+B.2   Human Reviewers
+
+Across five rounds of review, more than 1,100 task-review assignments were completed. The following researchers
+participated in the human review process.
+Jiangyu Zhou1 , Yuexi Pan1 , Hengyu Wang1 , Honghe Ren1 , Xiaohan Jia1 , Xueyang Zhou1 , Cheng Zhang13 , Yuanning
+Feng1 , Sijia Chen10 , Junhao Wu1 , Huan Wang1 , Koutian Wu13 , Qingyuan Zheng1 , Peigan Gao9 , Wenzhe Li1 , Jiakun
+Wu1 , Jingjing Zhou1 , Ruixuan Jia1 , Yuexing Hao2 , Yan Xu2 , Hongrui Zhang7 , Zhengxiang Cheng1 , and Xianglin Ji2 .
+
+B.3   Affiliations
+
+  1                                                              7
+    Tsinghua University, Beijing, China                             Boston University, Boston, MA, USA
+  2                                                              8
+    Massachusetts Institute of Technology, Cambridge, MA,           The University of Queensland, Brisbane, QLD, Australia
+    USA                                                           9
+                                                                    University of Science and Technology of China, Hefei, China
+  3
+    Harvard University, Cambridge, MA, USA                       10
+                                                                    Flatiron Institute, New York, NY, USA
+  4
+    Carnegie Mellon University, Pittsburgh, PA, USA              11
+                                                                    Microsoft Research
+  5
+    University of Michigan, Ann Arbor, MI, USA                   12
+                                                                    AG2 AI
+  6
+    University of Illinois Urbana–Champaign, Urbana, IL, USA     13
+                                                                    Independent Researcher
+
+
+C     Contributing to ASI-Bench
+Growing ASI-Bench with the Research Community. ASI-Bench is designed as an evolving, community-driven
+benchmark rather than a fixed collection of scientific problems. The first release contains 60 project-level tasks across
+11 scientific domains, but these tasks represent only a small fraction of the scientific challenges on which increasingly
+capable AI systems should be evaluated. Many of the most meaningful problems are best identified by researchers
+working directly at the frontier of their respective fields. We therefore invite scientists, engineers, AI researchers, and
+benchmark developers to contribute new research tasks to future releases of ASI-Bench. We particularly welcome
+problems that introduce new scientific domains, broaden the methodological diversity of existing domains, or test
+research capabilities that remain underrepresented in the current benchmark.
+A contributed task should represent a genuine scientific problem rather than a conventional question-answering exercise.
+It should define a meaningful and reproducible scientific objective, require non-trivial reasoning or research execution,
+and produce artifacts that can be evaluated through explicit and reproducible criteria. Contributors retain the scientific
+substance of their research problems while expressing them through the standardized ASI-Bench task format.
+
+What Constitutes a Complete Task? A complete contribution contains not only a scientific question, but also
+the materials required to execute and evaluate it reproducibly. Each submission should include: (i) a clearly stated
+scientific objective and an explanation of why the problem is non-trivial; (ii) four prompt variants, B1–B4, defining the
+methodological-information gradient; (iii) explicit input and output specifications for all agent-visible files and required
+artifacts; (iv) a reproducible reference-generation procedure; (v) an evaluation specification containing validity checks
+and weighted scoring criteria; (vi) the scientific software dependencies required by the task; and (vii) evidence from
+local evaluation across all four information conditions.
+
+Constructing the B1–B4 Information Gradient. A central requirement of each contributed task is the controlled
+construction of four information conditions. B1 provides the scientific background, method, equations, and procedural
+information required to execute the task. B2 specifies the intended methodological approach and relevant constraints
+while leaving implementation decisions to the agent. B3 specifies only the scientific objective, available inputs,
+constraints, and required outputs, requiring the agent to determine an appropriate solution strategy independently. B4
+extends B3 with factually correct but non-essential information, allowing robustness to irrelevant context to be evaluated.
+In particular, B3 and B4 should not reveal the intended algorithm, solver, method, or other information that would
+compromise the methodological gradient.
+
+How to Contribute a Task. To make task contribution accessible across scientific disciplines, ASI-Bench provides a
+public authoring scaffold and an online Guided Flow. As shown in Figure 5, contributors can start from the public task
+template and complete the submission through the online portal at https://asibench.apexin.ai/submit or via
+the CLI launcher. Before submission, each task must form a self-contained and reproducible package. It should include
+a well-defined scientific objective, four B1–B4 prompts, task data, a reference-generation script (generate_gt.py),
+
+
+                                                            11
+ASI-Bench
+
+
+
+
+Figure 5: ASI-Bench task contribution portal. The online submission workspace provides a 15-step Guided
+Flow for constructing and validating new tasks. Representative interfaces show the major stages of task authoring,
+including scientific problem definition, B1–B4 prompt construction, evaluation design with gates and scorers, runtime
+configuration, task-file preparation, and local testing before review.
+
+
+an evaluation configuration, runtime dependencies, and local-testing evidence. The contribution process consists of
+three main stages:
+
+1. Formulate the Scientific Question. Contributors first define the scientific question to be investigated and explain
+   why it is non-trivial. The task should specify what must be computed or discovered, rather than prescribing how
+   to solve it. It should also declare the scientific dependencies required by the task. The target result must be
+   deterministic and reproducible so that it can support reliable evaluation.
+2. Build the Four Prompt Levels. Contributors construct B1–B4 for the same scientific objective. B1 provides the
+   complete method and detailed methodological guidance. B2 retains method-level guidance but leaves implemen-
+   tation decisions to the agent. B3 specifies only the objective, inputs, constraints, and required artifacts, without
+   revealing the intended method. B4 keeps the B3 task unchanged while adding factually correct but non-essential
+   information. B3 and B4 must remain complete task specifications, including all required inputs and outputs. Con-
+   tributors also provide generate_gt.py to generate the reference result and define evaluation gates and weighted
+   scorers for the required scientific outputs.
+3. Test, Submit, and Revise. Before submission, contributors evaluate B1–B4 using the model and evaluation
+   settings specified by the submission portal at https://asibench.apexin.ai/submit/, and report the resulting
+   scores. Local testing also records execution time, environment information, sandbox provenance, and scorer-replay
+   evidence. These results are used to check task difficulty, information leakage, reproducibility, and evaluation
+   stability. Once the required files and evidence are complete, the task can be submitted for review. Reviewers
+   examine the scientific formulation, B1–B4 information gradient, reference generation, scoring logic, and runtime
+   behavior. Contributors then revise the task in response to feedback until it satisfies the benchmark requirements.
+
+Contribution Recognition. Community contributors are treated as participants in the construction of ASI-Bench
+rather than merely as external data submitters. For every contributed task that successfully passes scientific and technical
+review and is incorporated into an official ASI-Bench release, the corresponding task contributor(s) will be included in
+the contributor list of that benchmark release.
+
+An Open Benchmark for the Path Ahead. The current 60 tasks should be viewed as a starting point rather than
+a closed test set. The scientific problems that will distinguish increasingly capable AI systems cannot be defined by
+
+
+                                                            12
+ASI-Bench
+
+
+a single research group alone. We therefore invite researchers from different disciplines to contribute the research
+problems they believe future AI systems should be able to solve, and invite benchmark and model developers to help
+refine evaluations, identify failure cases, and validate new tasks. By continuously incorporating new scientific challenges
+from the research community, we aim for ASI-Bench to evolve together with AI capability, challenge the limits of
+today’s AI, and ultimately help measure and accelerate progress beyond the frontier of human scientific capability
+toward artificial superintelligence.
+
+D      Case Study
+
+    Representative Scientific Task
+    Task: 2D Anisotropic Stiff Dynamics
+    The agent is given observations of a two-dimensional nonlinear dynamical system on a periodic spatial domain.
+    Input data
+           • system_info.json: system parameters and timing metadata;
+           • field_evolution.npy: observed spatio-temporal field snapshots;
+           • initial_condition.npy: initial field for the prediction task.
+    Scientific objective
+    Given the observations, the agent must:
+         1. characterize the spatial and temporal dynamics;
+         2. construct a model that reproduces the observed dynamics;
+         3. predict the field at a future target time;
+         4. extract physically meaningful diagnostics.
+    Required artifacts
+    The agent must produce a predicted field, spatial spectrum, physical diagnostics, scientific visualizations, data-
+    analysis results, and the complete executable simulation code.
+    The scientific objective, input data, required artifacts, and evaluation criteria are kept fixed across B1–B4. Only the
+    information provided in the prompt changes.
+
+    B1 Prompt — Full Equation and Solver Guide
+    Task Overview
+    You are given observed spatio-temporal evolution data from a 2D nonlinear pattern-forming system governed by a conserved
+    anisotropic Kuramoto–Sivashinsky-type equation on a doubly periodic domain:
+    u_t = -alpha * u
+          + u_xx + mu * u_yy
+          - nu * u_xxxx
+          - 2 * gamma * u_xxyy
+          - delta * u_yyyy
+          + nabla^2 [
+              (lambda_xx / 2) * u_x^2
+              + lambda_xy * u_x * u_y
+              + (lambda_yy / 2) * u_y^2
+            ]
+    The domain is [0,Lx] x [0,Ly]. The prompt provides the values of Lx, Ly, alpha, nu, mu, gamma, delta, lambda_xx,
+    lambda_xy, and lambda_yy.
+    Spatial Discretization
+    Use a 2D Fourier pseudospectral method. Define
+    kx = 2*pi*fftfreq(Nx, d=dx)
+    ky = 2*pi*fftfreq(Ny, d=dy)
+    and the Fourier-space linear operator
+    L_hat =
+
+
+
+                                                              13
+ASI-Bench
+
+
+
+      -alpha
+      + kx^2
+      + mu * ky^2
+      - nu * kx^4
+      - 2 * gamma * kx^2 * ky^2
+      - delta * ky^4
+ Compute the nonlinear term pseudospectrally in conserved form:
+ f(u_x, u_y) =
+     (lambda_xx / 2) * u_x^2
+     + lambda_xy * u_x * u_y
+     + (lambda_yy / 2) * u_y^2
+
+ N_hat = -(kx^2 + ky^2) * fft2(f)
+ Apply 2/3-rule dealiasing to the nonlinear term.
+ Time Integration
+ The system is stiff because of the fourth-order terms. Use ETDRK4.
+ Precompute
+ E = exp(L_hat * dt)
+ E2 = exp(L_hat * dt / 2)
+ and construct the ETDRK4 coefficients using the Kassam–Trefethen contour-integral formulas.
+ For the current Fourier state:
+ a = E2 * u_hat + Q * N_hat(u_hat)
+ b = E2 * u_hat + Q * N_hat(a)
+ c = E2 * a
+     + Q * (2*N_hat(b) - N_hat(u_hat))
+
+ u_hat_next =
+       E * u_hat
+     + f1 * N_hat(u_hat)
+     + 2*f2 * (N_hat(a) + N_hat(b))
+     + f3 * N_hat(c)
+ Your job is to analyze the observed data, reconstruct the numerical solver, predict the field at the target time, and produce the
+ required scientific artifacts.
+
+ B2 Prompt — Method Background
+ Task
+ You are given observed data from a 2D nonlinear evolution system that produces directionally uneven, spatially complex
+ patterns. The system is stiff and exhibits irregular pattern dynamics rather than simple steady diffusion.
+ Your goal is to analyze the data, build a numerical model that reproduces the dynamics from the supplied initial condition,
+ predict the future field, and extract several physical diagnostics.
+ Physical and Numerical Background
+ This is a fourth-order nonlinear PDE problem in two spatial dimensions. The main ingredients are:
+         • weak linear damping;
+         • destabilizing long-wave growth through second-order terms;
+         • stabilizing high-order dissipation through fourth-order terms, including cross-derivative coupling;
+         • nonlinear energy transfer with a conservation-type structure;
+         • different behavior in the two spatial directions.
+ Because of the fourth-order terms, the linear stiffness can be severe. For this class of systems, methods based on spectral
+ discretization with stiffness-aware time stepping are needed.
+ Reasonable time-stepping approaches include:
+         • ETD methods such as ETDRK4;
+         • IMEX schemes;
+         • semi-implicit spectral integrators.
+
+
+
+
+                                                                14
+ASI-Bench
+
+
+
+ ETD-style spectral solvers are often competitive, but they are not the only reasonable option.
+ The system parameters are supplied in data/system_info.json with neutralized coefficient names.
+ Inspect the observed data before locking in a solver. The two spatial directions should be analyzed separately where appropriate.
+ The task is not only to forecast the field, but also to recover interpretable physical structure from the data.
+
+ B3 Prompt — Research Objective and Data Only
+ Task
+ You are given observed spatio-temporal data from a 2D nonlinear system on a periodic domain. The field develops structured
+ patterns and evolves in a complex, nontrivial way over time.
+ Input Data
+         • data/system_info.json: system parameters and timing metadata;
+         • data/field_evolution.npy: observed 2D field snapshots;
+         • data/initial_condition.npy: initial field used for prediction.
+ Goal
+        1. Explore the observed data to characterize its spatial and temporal structure.
+        2. Identify or construct a mathematical model that can reproduce the observed dynamics from the supplied initial
+           condition.
+        3. Predict the field at the target time specified in system_info.json.
+        4. Extract physically meaningful quantities from both the observed data and the predicted field.
+ Constraints
+         • Outputs must be finite, with no NaN or Inf values.
+         • Use the provided data files only.
+         • The governing equation, numerical representation, and effective evolution strategy are not given explicitly. Identifying
+           an appropriate approach is part of the task.
+
+ B4 Prompt — Research Objective with Distracting Information
+ Task
+ You are given observed spatio-temporal data from a 2D nonlinear system on a periodic domain. The field develops structured
+ patterns and evolves in a complex, nontrivial way over time.
+ Goal
+        1. Explore the observed data to characterize its spatial and temporal structure.
+        2. Identify or construct a mathematical model that can reproduce the observed dynamics.
+        3. Predict the field at the specified target time.
+        4. Extract physically meaningful quantities from the observed and predicted fields.
+ Additional Context
+ Several unrelated 2D PDE families can produce structured fields with evolving spectra. Reaction–diffusion systems such as
+ FitzHugh–Nagumo or Gray–Scott models generate Turing patterns through activator–inhibitor interactions. Phase-field models
+ such as Cahn–Hilliard describe spinodal decomposition. Swift–Hohenberg-type equations model convective pattern formation.
+ Thin-film equations describe coating flows and droplet spreading. Complex Ginzburg–Landau variants model oscillatory
+ instabilities.
+ There are also many possible computational routes. Finite differences with explicit stepping are straightforward. IMEX schemes
+ treat different parts of the operator differently. Exponential integrators handle the linear part through matrix exponentials.
+ Operator splitting divides the problem into substeps. Pseudospectral solvers use FFTs. Neural operators attempt to learn the
+ dynamics directly from data.
+ For spatial characterization, possible approaches include Fourier analysis, spatial autocorrelation, variograms, structure
+ functions, wavelet decomposition, proper orthogonal decomposition, and template matching. Temporal structure can be
+ analyzed through autocorrelation, recurrence analysis, or temporal spectra.
+ Some preliminary notes are also attached:
+           “maybe it is phase-field or Cahn–Hilliard?”
+           “could be some activator–inhibitor reaction–diffusion thing?”
+
+
+
+                                                                15
+ASI-Bench
+
+
+
+          “try a simpler neural surrogate first?”
+          “maybe just compare the last observed frame to the target frame?”
+          “check if the patterns are just equilibrium Turing patches”
+ There is also unrelated background chatter about deadlines, news, semiconductor markets, sports, entertainment, and upcoming
+ meetings.
+ Your job remains the same: focus on the supplied scientific data, infer a suitable model, produce the required outputs, and
+ ignore irrelevant information.
+
+
+
+
+                                                             16
+

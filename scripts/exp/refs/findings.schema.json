@@ -1,0 +1,47 @@
+{
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "$id": "findings.schema.json",
+ "title": "findings/X-*.json — fresh critic output (SPEC §6.2, GUIDE P2.2)",
+ "oneOf": [
+  {
+   "type": "object",
+   "required": ["x_id", "attempt_id", "claim_sha", "verdict_agree", "findings", "failure_level", "credit_due", "anomalies"],
+   "additionalProperties": true,
+   "properties": {
+    "x_id": {"type": "string", "pattern": "^X-[0-9]{3,}$"},
+    "attempt_id": {"type": "string", "minLength": 4},
+    "claim_sha": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "verdict_agree": {"type": "boolean", "description": "does the critic agree with the numeric gate in findings/X.request.json.verdict_gate"},
+    "findings": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": ["anchor", "class", "blocking", "note"],
+      "properties": {
+       "anchor": {"type": "string", "minLength": 3,
+                  "description": "file:line | log:<file>:<line> | number:<literal that appears in results/>"},
+       "class": {"type": "string", "pattern": "^[A-FX]\\.[0-9]$", "description": "one of the 45 ARFT codes (skills/critic/refs/arft-codes.txt)"},
+       "blocking": {"type": "boolean"},
+       "note": {"type": "string", "minLength": 1},
+       "advisory": {"type": "boolean", "description": "set by findings_check.py when the anchor does not exist; never set by the critic"}
+      }
+     }
+    },
+    "failure_level": {"type": ["string", "null"], "enum": ["L0", "L1", "L2", "L3", "L4", null]},
+    "credit_due": {"type": "array", "items": {"type": "string"}, "minItems": 1,
+                   "description": "written BEFORE any failure — never mine a failure out of a strength (judge-guide §1 Rule 2)"},
+    "anomalies": {
+     "type": "array",
+     "items": {"type": "object", "required": ["what", "where", "disposed"],
+               "properties": {"what": {"type": "string"}, "where": {"type": "string"}, "disposed": {"type": "string"}}}
+    }
+   }
+  },
+  {
+   "type": "object",
+   "required": ["status"],
+   "properties": {"status": {"const": "critic_failed"}, "reason": {"type": "string"}},
+   "description": "written by dag/findings_check when the critic timed out, crashed, or produced an unparseable file; X.gate becomes pending_rejudge, never survived"
+  }
+ ]
+}
