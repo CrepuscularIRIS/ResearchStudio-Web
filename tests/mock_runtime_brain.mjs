@@ -86,7 +86,7 @@ function runSub(cmd) {
     return '  ✓ [kill_switch_integrity] All 2 kill-switch fields byte-identical\nvalidate: all pass'
   }
   if ((m = /phase4_render .* --out "([^"]+)\/"/.exec(cmd))) { ['idea.std.zh.md', 'idea.std.en.md', 'idea.detail.en.md'].forEach((c) => add(m[1] + '/' + c)); return 'rendered' }
-  if ((m = /cp -r '([^']+)\/r1\/phase1' '([^']+)\/'/.exec(cmd))) { add(m[2] + '/phase1/phase1_output.json'); return 'copied' }
+  if ((m = /cp -r '([^']+)\/r1\/phase1' '([^']+)\/phase1'/.exec(cmd))) { add(m[2] + '/phase1/phase1_output.json'); return 'copied' }
   if (/cp -r '[^']*_shared\/phase0'/.test(cmd)) {
     assert(/sha256sum .* > \.manifest/.test(cmd) && /cmp -s/.test(cmd), 'spawn writes and compares the phase0 manifest')
     for (const mm of cmd.matchAll(/cp -r '[^']+' '([^']+\/phase0)'/g)) for (const f of ['lit_results.json', 'lit_table.md', 'fulltext_cache.json']) add(mm[1] + '/' + f)
@@ -108,9 +108,9 @@ function runCommand(cmd) {
     if (/ p3 '/.test(cmd)) pre += '__QUOTE3 1/1 verified\n'
     return pre + runSub(cmd.slice(cmd.lastIndexOf('run.py')))
   }
-  if (/__PLAN_(OK|BAD)/.test(cmd)) return '__PLAN_OK warn: none'
-  if (/__SPEC_(OK|BAD)/.test(cmd)) return '__SPEC_OK '
-  if (/__RANK_(OK|BAD)/.test(cmd)) return '__RANK_OK '
+  if (/__PLAN_(OK|BAD)/.test(cmd)) { const p = /python3 - '([^']+)'/.exec(cmd)[1]; if (process.env.MOCK_KEEP_PLAN) { add(p); return '__PLAN_OK warn: none' } return has(p) ? '__PLAN_OK warn: none' : '__PLAN_BAD evidence_plan.json unreadable: [Errno 2] No such file' }
+  if (/__SPEC_(OK|BAD)/.test(cmd)) { const p = /python3 - '([^']+)'/.exec(cmd)[1]; return has(p + '/index.json') ? '__SPEC_OK ' : '__SPEC_BAD no spec/B*.json | spec/index.json missing' }
+  if (/__RANK_(OK|BAD)/.test(cmd)) { const p = /python3 - '([^']+)'/.exec(cmd)[1]; if (process.env.MOCK_KEEP_PLAN) { add(p); return '__RANK_OK ' } return has(p) ? '__RANK_OK ' : '__RANK_BAD ranking.json unreadable: [Errno 2] No such file' }
   if (/grep -cE .*dblp/.test(cmd)) return process.env.MOCK_DBLP_TIMEOUT ? '2' : '0'
   if (cmd.includes('QUERIES_JSON_BEGIN')) {
     const L = []
@@ -246,10 +246,16 @@ assert(seats.filter((c) => /Phase 4\.fill/.test(c.label)).every((c) => c.model =
 assert(seats.filter((c) => /Phase 4\.derive/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]' && c.effort === 'low'), 'derive on GLM low')
 assert(seats.filter((c) => /Phase 4\.1\.5/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]'), 'implementability on GLM')
 const ev = seats.filter((c) => /Phase 5/.test(c.label))
-assert(ev.length === 2 && ev.every((c) => c.model === 'claude-opus-5' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
+assert((process.env.MOCK_KEEP_PLAN ? ev.length === 0 : ev.length === 2) && ev.every((c) => c.model === 'claude-opus-5' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
 const sp = seats.filter((c) => /Phase 6/.test(c.label))
 assert(sp.length === 2 && sp.every((c) => c.model === SPEC_MODEL && c.deny.includes('Bash') && c.deny.includes('Edit') && !c.deny.includes('Glob') && c.prompt.includes('brain/spec.md (verbatim)') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('task.yaml (verbatim; inlined') && c.prompt.includes('prompt_b1.md (verbatim; inlined') && c.prompt.includes('"gates"')), 'Phase 6 spec seats: Opus, read-only repo, FROZEN, ASI gates form')
-assert(sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 2 && sh.filter((c) => /__SPEC_/.test(c.cmd)).length === 2, 'plan_check and spec_check ran once per run')
+if (process.env.MOCK_KEEP_PLAN) {
+  assert(seats.filter((c) => /Phase 5/.test(c.label)).length === 0 && result.runs.every((r) => /existing plan kept/.test(r.plan_check)) && sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 2, 'resume: an existing plan that passes plan_check is kept and the Phase 5 seat is skipped')
+  assert(seats.filter((c) => /^rank/.test(c.label)).length === 0 && /existing ranking kept/.test(result.rank_check || ''), 'resume: an existing ranking that passes rank_check is kept')
+} else {
+  assert(sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 4 && sh.filter((c) => /__SPEC_/.test(c.cmd)).length === 4, 'plan_check and spec_check run twice per run: once on the existing file (resume judge), once after the seat')
+  assert(result.runs.every((r) => r.plan_check.startsWith('OK') && !/existing/.test(r.plan_check) && r.spec_check.startsWith('OK') && !/existing/.test(r.spec_check)), 'fresh plans and specs were written, not kept: ' + JSON.stringify(result.runs.map((r) => [r.plan_check, r.spec_check])))
+}
 assert(sh.filter((c) => / p1 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 1, 'Phase 1 quote check once (r1)')
 assert(sh.filter((c) => / p3 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 2, '3.2 threat quote check once per run')
 assert(result.runs.every((r) => r.quote_check3 === '1/1 verified') && result.runs.find((r) => r.id === 'r1').quote_check === '3/3 verified', 'quote results recorded: ' + JSON.stringify(result.runs.map((r) => [r.quote_check, r.quote_check3])))
@@ -260,9 +266,9 @@ assert(p1[0].prompt.includes('evidence_quote') && p1[0].prompt.includes('RELATIO
 assert(ideR2.prompt.includes('RUN DIVERSITY') && ideR2.prompt.includes('rank 2'), 'r2 ideate takes the second-ranked anchor gap')
 assert(result.runs.every((r) => r.plan_check && r.plan_check.startsWith('OK') && r.spec && r.spec_check && r.spec_check.startsWith('OK')), 'plan/spec checks recorded: ' + JSON.stringify(result.runs.map((r) => [r.plan_check, r.spec_check])))
 const rk = seats.filter((c) => /^rank/.test(c.label))
-assert(rk.length === 1 && rk[0].model === 'claude-opus-5' && rk[0].effort === 'high' && rk[0].prompt.includes('/mock/root/r1/phase4/idea.detail.en.md') && rk[0].prompt.includes('/mock/root/r2/phase5/evidence_plan.json') && rk[0].prompt.includes('/mock/root/r2/phase3_critique/phase3_critique_output.json'), 'one rank seat over both runs')
-assert(rk[0].prompt.includes('references/rubric.md (verbatim; inlined') && rk[0].prompt.includes('references/calibration.md (verbatim; inlined') && rk[0].prompt.includes('strict-idea-review.md (verbatim; inlined') && rk[0].prompt.includes('Fatal Gates') && rk[0].prompt.includes('weighted_score') && rk[0].prompt.includes('expert-panel.md (verbatim; inlined') && rk[0].prompt.includes('review-output-standards.md (verbatim; inlined') && rk[0].prompt.includes('venue-idea-adapters.md (verbatim; inlined') && rk[0].prompt.includes('"panel"'), 'rank seat carries the CCF rubric + calibration + panel + output standards verbatim')
-assert(sh.filter((c) => /__RANK_/.test(c.cmd)).length === 1 && result.rank_check && result.rank_check.startsWith('OK'), 'rank_check ran once: ' + result.rank_check)
+if (!process.env.MOCK_KEEP_PLAN) assert(rk.length === 1 && rk[0].model === 'claude-opus-5' && rk[0].effort === 'high' && rk[0].prompt.includes('/mock/root/r1/phase4/idea.detail.en.md') && rk[0].prompt.includes('/mock/root/r2/phase5/evidence_plan.json') && rk[0].prompt.includes('/mock/root/r2/phase3_critique/phase3_critique_output.json'), 'one rank seat over both runs')
+if (!process.env.MOCK_KEEP_PLAN) assert(rk[0].prompt.includes('references/rubric.md (verbatim; inlined') && rk[0].prompt.includes('references/calibration.md (verbatim; inlined') && rk[0].prompt.includes('strict-idea-review.md (verbatim; inlined') && rk[0].prompt.includes('Fatal Gates') && rk[0].prompt.includes('weighted_score') && rk[0].prompt.includes('expert-panel.md (verbatim; inlined') && rk[0].prompt.includes('review-output-standards.md (verbatim; inlined') && rk[0].prompt.includes('venue-idea-adapters.md (verbatim; inlined') && rk[0].prompt.includes('"panel"'), 'rank seat carries the CCF rubric + calibration + panel + output standards verbatim')
+if (!process.env.MOCK_KEEP_PLAN) assert(sh.filter((c) => /__RANK_/.test(c.cmd)).length === 2 && result.rank_check && result.rank_check.startsWith('OK') && !/existing/.test(result.rank_check), 'rank_check ran twice (resume judge + after the seat): ' + result.rank_check)
 const vr = sh.filter((c) => / validate /.test(c.cmd))
 assert(vr.length === 2 + (process.env.MOCK_VALIDATE_FAIL ? 1 : 0) && vr.every((c) => !/phase4_render/.test(c.cmd)), 'validate runs alone (repairable), once per run + one re-validate after a repair')
 const rn = sh.filter((c) => /phase4_render/.test(c.cmd))

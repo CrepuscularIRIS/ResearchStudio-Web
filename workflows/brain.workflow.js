@@ -5,8 +5,8 @@ export const meta = {
   phases: [
     { title: 'Intake', detail: 'Phase -1: repository → intake.json + substrate.md + queries.json (GLM, read-only tools)' },
     { title: 'Phase 0', detail: 'RS retrieval → pattern tagging shards (GLM) → lit_table_merge → full-text fetch → spawn r1..rK' },
-    { title: 'Runs', detail: 'run.py next drives each run: Phase 1 (Opus, r1 only) → 2.1+2.2 (Opus) → citation gate → 2.3 (GLM+python) ∥ 3.1 → 3.2 (K3, threat quote checked) → 3.3 (Opus) → Phase 4 → validate (repair ≤2) → cards → regression_check' },
-    { title: 'Evidence', detail: 'Phase 5 evidence_plan.json (Opus) → plan_check → Phase 6 spec/B*.json (Opus, read-only repo) → spec_check' },
+    { title: 'Runs', detail: 'run.py next drives each run: Phase 1 (Opus, r1 only) → 2.1+2.2 (Opus) → citation gate → 2.3 (Opus+python, fallback GLM) ∥ 3.1 → 3.2 (K3 ∥ Sol second auditor, merged; threat quote checked) → 3.3 (Opus) → Phase 4 → validate (repair ≤2) → cards → regression_check' },
+    { title: 'Evidence', detail: 'Phase 5 evidence_plan.json (Opus, fallback GLM) → plan_check → Phase 6 spec/B*.json (Opus, read-only repo, fallback GLM) → spec_check; existing files that pass their check are kept, not regenerated' },
     { title: 'Rank', detail: 'one Opus seat scores the K ideas with the CCF idea-review rubric + calibration (10 dims, fatal gates, tournament) → rank_check — rank, never kill' },
   ],
 }
@@ -5340,7 +5340,8 @@ function longJob(rd, cmd) {
 }
 function launchCmd(key, cmd) {
   const log = JOBS + '/' + key + '.log', pid = JOBS + '/' + key + '.pid'
-  return 'mkdir -p ' + shq(JOBS) + ' && rm -f ' + shq(pid) + ' && (setsid nohup bash -c ' + shq(cmd) + ' > ' + shq(log) + ' 2>&1 & echo $! > ' + shq(pid) + ') && sleep 1 && echo LAUNCHED:' + key
+  // a job whose pid is still alive (a retry after an interrupted seat, a resumed run) is reused instead of started a second time onto the same output file
+  return 'mkdir -p ' + shq(JOBS) + ' && if [ -e ' + shq(pid) + ' ] && kill -0 "$(cat ' + shq(pid) + ')" 2>/dev/null; then echo LAUNCHED:' + key + '; else rm -f ' + shq(pid) + ' && (setsid nohup bash -c ' + shq(cmd) + ' > ' + shq(log) + ' 2>&1 & echo $! > ' + shq(pid) + ') && sleep 1 && echo LAUNCHED:' + key + '; fi'
 }
 function waitCmd(key, file, then) {
   const pid = JOBS + '/' + key + '.pid', log = JOBS + '/' + key + '.log'
@@ -5754,7 +5755,10 @@ async function driveRun(id) {
     if (short.length) notes = notes.replace(/Run the RUN command first \([^)]*\)(, then the sub-agent)?\.\s*/, 'The deterministic RUN command has already been executed by the workflow (its output file is listed under INPUT). ')
     if (job && k !== 'terms') notes = notes.replace(/TWO independent actions: \(1\).*?\(2\) run the 2\.3 sub-agent\.\s*/s, 'The 3.1 collision retrieval has already been launched in the background by the workflow — do only the 2.3 work. ')
     const dyn = { rd, run: id, repo: BRIEF.repo, step: em.step, inputs: inputs.concat(brainContext(k, id)), output: em.output, notes }
-    if (k === 'coherence') dyn.workdir = rd + '/phase2_coherence'
+    if (k === 'coherence') {
+      dyn.workdir = rd + '/phase2_coherence'
+      await prep('rm -f ' + shq(rd + '/phase2_coherence/blocking_findings.json') + ' ' + shq(rd + '/phase2_coherence/refined_candidate.json'), lbl('prep 2.3 (clear stale side outputs)'), 'Runs')   // a previous, unfinished attempt must not hand 3.2 stale findings
+    }
     let r
     if (k === 'audit' && SEATS.audit.second && !forceModel) {
       // The second auditor runs the SAME audit (prompt, refs, inputs) in parallel on its own model and context, into its own file; the
@@ -5773,8 +5777,7 @@ async function driveRun(id) {
     st.seats.push({ kind: k, step: em.step, ok: !!(r && r.ok), signal: (r && r.signal) || '', model: (r && r.model) || forceModel || SEATS[k].model })
     if (r && r.fell_back) st.fallbacks.push({ kind: k, step: em.step, from: SEATS[k].model, to: r.model })
     if (!r || !r.ok) throw new Error(k + ' seat failed twice: ' + ((r && r.note) || 'no result'))
-    if (k === 'phase1' && !/do_not_generate/.test(r.signal || '')) markPhase1(true)
-    lastSeat = { em, k, outputs: emitOutputs(em), retried: false }
+    lastSeat = { em, k, outputs: emitOutputs(em), retried: false, phase1Ok: k === 'phase1' && !/do_not_generate/.test(r.signal || '') }   // Phase 1 is shared with r2..rK only once its outputs verified readable
     if (job) {
       if (k === 'terms' && !(await launch(job.key, SKIP_ENV + long[0], lbl('collision'), 'Runs'))) throw new Error('could not launch collision')
       const w = await waitFor(job.key, job.file, lbl('collision'), 'Runs')
@@ -5789,6 +5792,10 @@ async function driveRun(id) {
     if (/\[implementability_(completeness|readability)\]/.test(line)) return 'impl'
     return null                                       // citation-guarded fields are never edited to silence a validator
   }
+  const rec = (kind, step, r) => {
+    st.seats.push({ kind, step, ok: !!(r && r.ok), signal: (r && r.signal) || '', model: (r && r.model) || SEATS[kind].model })
+    if (r && r.fell_back) st.fallbacks.push({ kind, step, from: SEATS[kind].model, to: r.model })
+  }
   async function repairSeat(kind, out) {
     const file = kind === 'fill' ? rd + '/phase4/phase4_expansion.json' : rd + '/phase4/phase4_implementability.json'
     const findings = out.split('\n').filter((l) => /[✗⚠]/.test(l)).join('\n').slice(0, 3000)
@@ -5796,7 +5803,7 @@ async function driveRun(id) {
     if (kind === 'fill') inputs.push(rd + '/phase3_revise/final_candidate.json  (upstream kill-switch values when the revise path ran; if it does not exist use the next file)', rd + '/phase2_generate/phase2_generate_output.json  (upstream kill-switch values)')
     const r = await seat(kind, { rd, run: id, repo: BRIEF.repo, step: 'validate repair — ' + kind, inputs: inputs.concat(brainContext(kind, id)), output: file,
       notes: 'VALIDATE REPAIR (ResearchStudio rule: fix ONLY the named contract; the workflow re-validates; cap 2). The validator findings below name the exact missing or malformed sections of the OUTPUT file. Read it whole, repair exactly those items, keep every other field byte-identical, and write the file whole. The kill-switch fields falsification_prediction and compute_budget may only be restored to their upstream value — never rewritten; citation-guarded fields are never edited. FINDINGS:\n' + findings }, lbl('validate repair ' + kind), 'Runs')
-    st.seats.push({ kind, step: 'validate repair', ok: !!(r && r.ok), signal: '' })
+    rec(kind, 'validate repair', r)
     if (!r || !r.ok) throw new Error('validate repair seat failed: ' + ((r && r.note) || 'no result'))
   }
 
@@ -5818,6 +5825,7 @@ async function driveRun(id) {
           continue
         }
         if (ne.warn) st.placeholders.push(seatDone.k + ': ' + ne.warn.slice(0, 160))
+        if (seatDone.phase1Ok) markPhase1(true)
         const qm = /__QUOTE ([^\n]*)/.exec(ne.fullOut || ''); if (qm) st.quote_check = qm[1]
         const qm3 = /__QUOTE3 ([^\n]*)/.exec(ne.fullOut || ''); if (qm3) st.quote_check3 = qm3[1]
         e = ne
@@ -5882,7 +5890,7 @@ async function driveRun(id) {
       const bottleneckRetry = e.inputs.some((l) => /BOTTLENECK-RETRY MODE/.test(l))
       if (kind === 'phase1' && id !== 'r1' && !bottleneckRetry) {
         if (await phase1Ready) {
-          pending = ['cp -r ' + shq(ROOT + '/r1/phase1') + ' ' + shq(rd + '/') + ' && { [ -e ' + shq(ROOT + '/r1/do_not_generate.md') + ' ] && cp ' + shq(ROOT + '/r1/do_not_generate.md') + ' ' + shq(rd + '/') + '; true; }']
+          pending = ['rm -rf ' + shq(rd + '/phase1') + ' && cp -r ' + shq(ROOT + '/r1/phase1') + ' ' + shq(rd + '/phase1') + ' && { [ -e ' + shq(ROOT + '/r1/do_not_generate.md') + ' ] && cp ' + shq(ROOT + '/r1/do_not_generate.md') + ' ' + shq(rd + '/') + '; true; }']
           st.seats.push({ kind: 'phase1', step: 'copied from r1', ok: true, signal: '' })
           continue
         }
@@ -5925,12 +5933,15 @@ async function driveRun(id) {
                SHARED + '/intake.json'].concat(brainContext('evidence', id))
     const planCheck = () => sh(PY + ' - ' + shq(out) + ' ' + shq(JSON.stringify(REQUIRED_BASELINES)) + ' <<\'PYEOF\'\n' + PLAN_CHECK_PY + '\nPYEOF', lbl('plan_check'), { phase: 'Evidence', timeout: 60000 })
     let extra = ''
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const pre = await planCheck(), pv = (/__PLAN_(OK|BAD) ?([^\n]*)/.exec(pre.out) || [])   // resumability: an existing evidence_plan.json is judged, never regenerated blindly
+    if (pv[1] === 'OK') { st.evidence_plan = out; st.plan_check = 'OK (existing plan kept)' + (pv[2] ? ': ' + pv[2].slice(0, 400) : ''); log(id + ' Phase 5: existing evidence_plan.json passes plan_check — seat skipped') }
+    else if (pv[1] === 'BAD' && !/unreadable/.test(pv[2] || '')) extra = ' PLAN_CHECK FINDINGS on the existing file (deterministic; fix every item, rewrite the whole file): ' + (pv[2] || '').slice(0, 1200)
+    for (let attempt = 0; attempt < 2 && !(attempt === 0 && st.evidence_plan); attempt++) {
       const r = await seat('evidence', {
         rd, run: id, repo: BRIEF.repo, step: 'Phase 5 — evidence plan' + (attempt ? ' (repair)' : ''), inputs: evidenceInputs, output: out,
         notes: 'Contract for the Worker session; the first block in run_order is the cheapest test that can kill the idea.' + extra,
       }, lbl('Phase 5 evidence plan' + (attempt ? ' repair' : '')), 'Evidence')
-      st.seats.push({ kind: 'evidence', step: 'Phase 5', ok: !!(r && r.ok), signal: '' })
+      rec('evidence', 'Phase 5', r)
       if (!r || !r.ok) { st.note = 'evidence plan failed: ' + ((r && r.note) || 'no result'); break }
       st.evidence_plan = out
       const c = await planCheck()
@@ -5947,13 +5958,16 @@ async function driveRun(id) {
                           SHARED + '/substrate.md  (file:line facts; every path is repo-relative under REPOSITORY)', SHARED + '/intake.json'].concat(brainContext('spec', id))
       const specCheck = () => sh(PY + ' - ' + shq(specDir) + ' ' + shq(BRIEF.repo) + ' ' + shq(JSON.stringify(FORBIDDEN_PATTERNS)) + ' ' + shq(rd + '/phase4/phase4_implementability.json') + ' <<\'PYEOF\'\n' + SPEC_CHECK_PY + '\nPYEOF', lbl('spec_check'), { phase: 'Evidence', timeout: 60000 })
       let extra2 = ''
-      for (let attempt = 0; attempt < 2; attempt++) {
+      const pre2 = await specCheck(), sv = (/__SPEC_(OK|BAD) ?([^\n]*)/.exec(pre2.out) || [])
+      if (sv[1] === 'OK') { st.spec = specDir; st.spec_check = 'OK (existing specs kept)' + (sv[2] ? ': ' + sv[2].slice(0, 400) : ''); log(id + ' Phase 6: existing spec/ passes spec_check — seat skipped') }
+      else if (sv[1] === 'BAD' && !/no spec\/B\*\.json|index\.json missing/.test(sv[2] || '')) extra2 = ' SPEC_CHECK FINDINGS on the existing files (deterministic; fix every item, rewrite the affected files whole): ' + (sv[2] || '').slice(0, 1200)
+      for (let attempt = 0; attempt < 2 && !(attempt === 0 && st.spec); attempt++) {
         const r = await seat('spec', {
           rd, run: id, repo: BRIEF.repo, step: 'Phase 6 — block specs' + (attempt ? ' (repair)' : ''), inputs: specInputs,
           output: specDir + '/index.json then ' + specDir + '/B<k>.json (one per block)',
           notes: 'Read the repository to name real files, functions and launchers; write only under RUN_DIR/spec/.' + extra2,
         }, lbl('Phase 6 block specs' + (attempt ? ' repair' : '')), 'Evidence')
-        st.seats.push({ kind: 'spec', step: 'Phase 6', ok: !!(r && r.ok), signal: '' })
+        rec('spec', 'Phase 6', r)
         if (!r || !r.ok) { st.note = 'spec seat failed: ' + ((r && r.note) || 'no result'); break }
         st.spec = specDir
         const c = await specCheck()
@@ -5984,7 +5998,10 @@ if (finished.length >= 2) {
   const rankInputs = finished.flatMap((x) => [ROOT + '/' + x.id + '/phase4/idea.detail.en.md', x.evidence_plan, ROOT + '/' + x.id + '/phase3_critique/phase3_critique_output.json  (3.2 audit: paper-pointed threat, verdict)'].concat(x.spec ? [x.spec + '/index.json  (block specs; B1 first)'] : [])).concat([SHARED + '/substrate.md  (compute envelope, baselines)'], brainContext('rank'))
   const rankCheck_ = () => sh(PY + ' - ' + shq(out) + ' ' + shq(JSON.stringify(finished.map((x) => x.id))) + ' <<\'PYEOF\'\n' + RANK_CHECK_PY + '\nPYEOF', 'rank_check', { phase: 'Rank', timeout: 60000 })
   let extra = ''
-  for (let attempt = 0; attempt < 2; attempt++) {
+  const pre = await rankCheck_(), rv = (/__RANK_(OK|BAD) ?([^\n]*)/.exec(pre.out) || [])
+  if (rv[1] === 'OK') { ranking = out; rankCheck = 'OK (existing ranking kept)' + (rv[2] ? ': ' + rv[2].slice(0, 400) : ''); log('Rank: existing ranking.json passes rank_check — seat skipped') }
+  else if (rv[1] === 'BAD' && !/unreadable/.test(rv[2] || '')) extra = ' RANK_CHECK FINDINGS on the existing file (deterministic; fix every item, rewrite the whole file): ' + (rv[2] || '').slice(0, 1200)
+  for (let attempt = 0; attempt < 2 && !(attempt === 0 && ranking); attempt++) {
     const r = await seat('rank', {
       rd: ROOT, run: 'all', repo: BRIEF.repo, step: 'Rank ' + finished.length + ' ideas' + (attempt ? ' (repair)' : ''), inputs: rankInputs, output: out,
       notes: 'Every finished run appears exactly once.' + extra,
