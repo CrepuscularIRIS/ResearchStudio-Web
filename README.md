@@ -30,7 +30,6 @@ One self-contained Workflow script (~430 KB, 41 verbatim prompt/reference files 
 | revise | 3.3 patch (named fields only) | Opus / high | read/write |
 | fill / derive / impl | 4b card (ARIS key-equations discipline) · plain register · 4.1.5 implementability | Opus / GLM / GLM | read/write |
 | evidence | Phase 5 evidence plan (CCF evidence design, ARIS experiment plan + ablation planner, Lehr MDE) | Opus / high, fallback GLM | read/write |
-| spec | Phase 6 B1 specs in machine form (`verdict_rule.keep_if_all`, arms, negative control, ASI `gates[]`) | Opus / high, fallback GLM | read-only repo |
 | rank | CCF rubric + calibration + expert panel; deterministic recomputation | Opus / high | read/write |
 
 Deterministic checks between seats (quote checks, `plan_check`, `spec_check`, `rank_check`, RS validate + regression_check, placeholder scan)
@@ -43,7 +42,8 @@ API retries and never reaches the seat's fallback (that is how GPT-6 Astra died 
 
 | skill | script | what it does |
 |---|---|---|
-| exp-next | `precheck.py` | claim the next block of the top-ranked run: Brain's own `spec_check` re-run, budget, decision-field seal (`spec.sha`), canary from `instruments/README.md` |
+| exp-spec | `spec_packet.py` + `spec_check.py --plan` | draft ONE block spec (`spec/B<k>.json`) on the Worker side under the former Brain Phase 6 contract (`scripts/exp/refs/spec_contract.md`, verbatim); PLAN ⊆ SPEC binding: keep_if_all numbers from the plan's keep_rule, the plan's kill_condition, forbids cover frozen_untouched |
+| exp-next | `precheck.py` | claim the next block of the top-ranked run: `spec_check.py` re-run, budget, decision-field seal (`spec.sha`), canary from `instruments/README.md` |
 | exp-critic spec / code / process | `critic.py` + `critic.md` + `anchor_check.py` | Grok CLI, read-only (`--permission-mode plan`), paths only, never summaries; `critic.md` is assembled verbatim from ARIS / ASI-Bench / ARFT / V8 texts; findings need a verifiable anchor; zero-discretion routing (pass · fix cap 2+1 · L2 · L3 · L4 needs a second vote) |
 | exp-build | refs (V8 PREREG / METHOD-COMPLETE / SELF_CHECK / PITFALLS / OBSTACLE, verbatim) | implement one block in a worktree to `gate_passed` |
 | exp-launch | `launch.sh` | zero-tolerance greps + `spec.gates` over the diff, GPU pre-flight, `systemd-run` + `launch_wrap.sh` (smoke canary → seeds, watchdog, ETA 2×; exit 3/4/5 are never verdicts) |

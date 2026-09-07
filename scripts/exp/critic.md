@@ -67,8 +67,8 @@ whose only evidence comes from this section is a polarity error and will be reje
 
 
 ## MODE: spec — before any code is written (is every scientific decision made?)
-### Brain's own contract for spec/B<k>.json
-(source: `.research/tools/brain_src/brain.logic.js (BANK.spec)`, verbatim)
+### The block-spec contract (former Brain Phase 6 prompt; the Worker drafts under it since 2026-09-07)
+(source: `.research/tools/exp/refs/spec_contract.md`, verbatim)
 
 The plan IS the experiment: steps are file-level and executable as written; run_cmd and smoke_cmd are copy-paste runnable; the implementer may make ENGINEERING decisions only — any SCIENTIFIC decision the spec leaves open is a defect of the spec, so if a decision must be delegated, list it in decision_points with a default value.
 

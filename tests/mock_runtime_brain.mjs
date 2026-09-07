@@ -173,7 +173,7 @@ const stub = async (prompt, opts) => {
 const par = async (t) => Promise.all(t.map((f) => f()))
 const AF = Object.getPrototypeOf(async function () {}).constructor
 const main = new AF('args', 'agent', 'parallel', 'pipeline', 'phase', 'log', src)
-const result = await main({ root: ROOT, k: 2, repo: '/mock/repo', dataset: 'NYU', venue: 'PR', goal: 'FROZEN mock goal text', anomalies: '/mock/anomalies.md', skill_dir: SK, stagger: true, negative_anchors: process.env.MOCK_NEG_ANCHORS ? ['/mock/failures/X-001.json'] : undefined, seat_models: process.env.MOCK_SEAT_MODELS ? { spec: 'sol' } : undefined }, stub, par, par, (t) => console.log('── ' + t), (m) => console.log('  ' + m))
+const result = await main({ root: ROOT, k: 2, repo: '/mock/repo', dataset: 'NYU', venue: 'PR', goal: 'FROZEN mock goal text', anomalies: '/mock/anomalies.md', skill_dir: SK, stagger: true, negative_anchors: process.env.MOCK_NEG_ANCHORS ? ['/mock/failures/X-001.json'] : undefined, seat_models: process.env.MOCK_SEAT_MODELS ? { evidence: 'sol' } : undefined }, stub, par, par, (t) => console.log('── ' + t), (m) => console.log('  ' + m))
 
 // ---------------------------------------------------------------- assertions
 const seats = calls.filter((c) => c.kind === 'seat')
@@ -231,7 +231,7 @@ if (process.env.MOCK_SEAT_FAIL) {
   assert(coh.length === 2 && coh.every((c) => c.model === 'claude-opus-5'), 'coherence seats on Opus (fresh context, not the 2.2 author context)')
   assert(result.runs.every((r) => r.fallbacks.length === 0), 'no fallbacks on the happy path')
 }
-const SPEC_MODEL = process.env.MOCK_SEAT_MODELS ? 'gpt-5.6-sol' : 'claude-opus-5'   // args.seat_models = { spec: 'sol' } in that variant
+const EVIDENCE_MODEL = process.env.MOCK_SEAT_MODELS ? 'gpt-5.6-sol' : 'claude-opus-5'   // args.seat_models = { evidence: 'sol' } in that variant
 const cohR1 = coh.find((c) => c.label.startsWith('r1:'))
 assert(idx(/^sh: r1: collision launch/) < cohR1.i && cohR1.i < idx(/^sh: r1: collision wait 1/), 'collision launched before 2.3 and awaited after')
 
@@ -242,7 +242,7 @@ if (process.env.MOCK_BASH_FAIL) {
   assert(audK3.length === 3 && rep.length === 2 && rep.every((c) => c.prompt.includes('append_items must be a list')), 'a deterministic step that rejects the audit output sends the seat back once with the rejection (K3 + second auditor): ' + audK3.length + '/' + rep.length)
   assert(sh.filter((c) => /run\.py['"]? phase4_skeleton /.test(c.cmd)).length === 3, 'the rejected step runs again after the repair pass (r1 fail + r1 retry + r2)')
 } else assert(audK3.length === 2 && audSol.length === 2 && audSol.every((c) => c.prompt.includes('SECOND AUDITOR') && c.prompt.includes('second_opinion.json')) && audK3.every((c) => !c.prompt.includes('SECOND AUDITOR')), 'per run: one K3 audit + one Sol second auditor, same prompt family, own output file')
-assert(audSol.every((c) => c.prompt.includes('second_auditor_packet.md') && c.prompt.includes('THREAT QUOTE') && c.prompt.includes('SCOPE CHECK') && c.prompt.includes('FROZEN GOAL') && !c.prompt.includes('strict-idea-review.md (verbatim; inlined') && !c.prompt.includes('arft_guide.md (verbatim; inlined') && !/^\s+- \/[^\n]*(lit_table|fulltext|lit_results)/m.test(c.prompt) && c.deny.includes('Glob') && c.deny.includes('Bash') && !c.deny.includes('Read') && !c.deny.includes('Write')) && audK3.every((c) => /phase0\/lit_table/.test(c.prompt)), 'second auditor: one packet file, lean static block, Read+Write only; K3 keeps the corpus and the CCF/ARFT refs')
+assert(audSol.every((c) => c.prompt.includes('second_auditor_packet.md') && c.prompt.includes('THREAT QUOTE') && c.prompt.includes('SCOPE CHECK') && c.prompt.includes('FROZEN GOAL') && !c.prompt.includes('strict-idea-review.md (verbatim; inlined') && !c.prompt.includes('arft_guide.md (verbatim; inlined') && !/^\s+- \/\S*(lit_table\.md|fulltext|lit_results)/m.test(c.prompt) && c.deny.includes('Glob') && c.deny.includes('Bash') && !c.deny.includes('Read') && !c.deny.includes('Write')) && audK3.every((c) => c.prompt.includes('lit_table_slice.md') && c.prompt.includes('second_auditor_packet.md') && c.prompt.includes('READ BUDGET') && !/^\s+- \/\S*phase0\/(lit_table\.md|lit_results|fulltext)/m.test(c.prompt) && c.prompt.includes('strict-idea-review.md (verbatim; inlined')), 'second auditor: one packet file, lean static block, Read+Write only; K3: packet + lit_table slice instead of the corpus, keeps the CCF/ARFT refs')
 assert(sh.filter((c) => /print\("PACKET/.test(c.cmd || '')).length === (process.env.MOCK_BASH_FAIL ? 3 : 2), 'one deterministic packet build per audit pass')
 const mergeCalls = calls.filter((c) => /print\("AUDIT_MERGE/.test(c.cmd || ''))
 assert(mergeCalls.length === (process.env.MOCK_BASH_FAIL ? 3 : 2), 'one deterministic audit merge per audit pass (the self-heal repair pass merges again): ' + mergeCalls.length)
@@ -253,15 +253,13 @@ assert(seats.filter((c) => /Phase 4\.fill/.test(c.label)).every((c) => c.model =
 assert(seats.filter((c) => /Phase 4\.derive/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]' && c.effort === 'low'), 'derive on GLM low')
 assert(seats.filter((c) => /Phase 4\.1\.5/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]'), 'implementability on GLM')
 const ev = seats.filter((c) => /Phase 5/.test(c.label))
-assert((process.env.MOCK_KEEP_PLAN ? ev.length === 0 : ev.length === 2) && ev.every((c) => c.model === 'claude-opus-5' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
-const sp = seats.filter((c) => /Phase 6/.test(c.label))
-assert(sp.length === 2 && sp.every((c) => c.model === SPEC_MODEL && c.deny.includes('Bash') && c.deny.includes('Edit') && !c.deny.includes('Glob') && c.prompt.includes('brain/spec.md (verbatim)') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('task.yaml (verbatim; inlined') && c.prompt.includes('prompt_b1.md (verbatim; inlined') && c.prompt.includes('"gates"')), 'Phase 6 spec seats: Opus, read-only repo, FROZEN, ASI gates form')
+assert((process.env.MOCK_KEEP_PLAN ? ev.length === 0 : ev.length === 2) && ev.every((c) => c.model === EVIDENCE_MODEL && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
 if (process.env.MOCK_KEEP_PLAN) {
   assert(seats.filter((c) => /Phase 5/.test(c.label)).length === 0 && result.runs.every((r) => /existing plan kept/.test(r.plan_check)) && sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 2, 'resume: an existing plan that passes plan_check is kept and the Phase 5 seat is skipped')
   assert(seats.filter((c) => /^rank/.test(c.label)).length === 0 && /existing ranking kept/.test(result.rank_check || ''), 'resume: an existing ranking that passes rank_check is kept')
 } else {
-  assert(sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 4 && sh.filter((c) => /__SPEC_/.test(c.cmd)).length === 4, 'plan_check and spec_check run twice per run: once on the existing file (resume judge), once after the seat')
-  assert(result.runs.every((r) => r.plan_check.startsWith('OK') && !/existing/.test(r.plan_check) && r.spec_check.startsWith('OK') && !/existing/.test(r.spec_check)), 'fresh plans and specs were written, not kept: ' + JSON.stringify(result.runs.map((r) => [r.plan_check, r.spec_check])))
+  assert(sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 4 && sh.filter((c) => /__SPEC_/.test(c.cmd)).length === 0, 'plan_check runs twice per run (resume judge + after the seat); no spec seat in the Brain any more')
+  assert(result.runs.every((r) => r.plan_check.startsWith('OK') && !/existing/.test(r.plan_check)), 'fresh plans were written, not kept: ' + JSON.stringify(result.runs.map((r) => r.plan_check)))
 }
 assert(sh.filter((c) => / p1 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 1, 'Phase 1 quote check once (r1)')
 assert(sh.filter((c) => / p3 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 2, '3.2 threat quote check once per run')
@@ -271,7 +269,7 @@ assert(audK3.every((c) => c.prompt.includes('SCOPE CHECK') && c.prompt.includes(
 assert(seats.filter((c) => /Phase 3\.3/.test(c.label)).every((c) => c.prompt.includes('FROZEN GOAL')), 'revise seats get FROZEN')
 assert(p1[0].prompt.includes('evidence_quote') && p1[0].prompt.includes('RELATION') && p1[0].prompt.includes('literature-grounded-evolution.md (verbatim; inlined'), 'Phase 1 asks for evidence quotes + relation edges (CCF relation map inlined)')
 assert(ideR2.prompt.includes('RUN DIVERSITY') && ideR2.prompt.includes('rank 2'), 'r2 ideate takes the second-ranked anchor gap')
-assert(result.runs.every((r) => r.plan_check && r.plan_check.startsWith('OK') && r.spec && r.spec_check && r.spec_check.startsWith('OK')), 'plan/spec checks recorded: ' + JSON.stringify(result.runs.map((r) => [r.plan_check, r.spec_check])))
+assert(result.runs.every((r) => r.plan_check && r.plan_check.startsWith('OK') && r.spec === undefined), 'plan check recorded; no spec fields any more: ' + JSON.stringify(result.runs.map((r) => r.plan_check)))
 const rk = seats.filter((c) => /^rank/.test(c.label))
 if (!process.env.MOCK_KEEP_PLAN) assert(rk.length === 1 && rk[0].model === 'claude-opus-5' && rk[0].effort === 'high' && rk[0].prompt.includes('/mock/root/r1/phase4/idea.detail.en.md') && rk[0].prompt.includes('/mock/root/r2/phase5/evidence_plan.json') && rk[0].prompt.includes('/mock/root/r2/phase3_critique/phase3_critique_output.json'), 'one rank seat over both runs')
 if (!process.env.MOCK_KEEP_PLAN) assert(rk[0].prompt.includes('references/rubric.md (verbatim; inlined') && rk[0].prompt.includes('references/calibration.md (verbatim; inlined') && rk[0].prompt.includes('strict-idea-review.md (verbatim; inlined') && rk[0].prompt.includes('Fatal Gates') && rk[0].prompt.includes('weighted_score') && rk[0].prompt.includes('expert-panel.md (verbatim; inlined') && rk[0].prompt.includes('review-output-standards.md (verbatim; inlined') && rk[0].prompt.includes('venue-idea-adapters.md (verbatim; inlined') && rk[0].prompt.includes('"panel"'), 'rank seat carries the CCF rubric + calibration + panel + output standards verbatim')

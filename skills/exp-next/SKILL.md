@@ -3,7 +3,9 @@ name: exp-next
 description: "Experiment step 1 — claim the next block of the top-ranked Brain idea and run every free check before a line of code (precheck.py). Use when starting an experiment, after a block survived, or when the user says 领取 / next block / 开始实验."
 ---
 
-# exp-next — 领取 + 预检（脚本判，零裁量）
+# exp-next
+
+> 2026-09-07 起 Brain 不再写 spec：若 `spec/<Bk>.json` 不存在，导航器先给 `/exp-spec`（Worker 起草 + spec_check），再回到这里领取。 — 领取 + 预检（脚本判，零裁量）
 
 硬核（≤10 行，每条有出处）
 1. 设计全在 Brain：`spec/B<k>.json` 是图纸，Worker 不做任何科学决定；留白 = spec 缺陷，回 Brain（Brain spec 合同；ASI B1→B2 −21.8）。

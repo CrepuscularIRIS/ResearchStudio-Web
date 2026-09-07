@@ -273,3 +273,11 @@ Brain 现在交出的契约比 §3 设想的更完整：`spec/B<k>.json`（chang
 - 导航侧：`next.py` 的 `dead(X)`（有卡即死）、`run_candidates`（rank-1 → backup_run）、`after_all_dead`（重触发或 BLOCKED）、`retrigger.json` 血统指针（`navigate` 顺着走，输出 `root` + `lineage`）；`retrigger.py` 幂等、超帽退出 3、无卡退出 3。
 - 仍未跑过：Grok 真调用；Brain 的 `spec.arms[].eval_type` 仍是 warn；K3 第二票。
 - **重复发射防护（2026-09-07 深夜）**：`brain_lock.py acquire|release` + `_common.brain_lock_state`（锁文件 + 根下最新 mtime 心跳，45 分钟无写入视为死亡）；`next.py` 对新鲜锁给 WAIT 900 s，对陈旧锁给带说明的 BRAIN；`launch.sh` 发射前查 `is-active`，已在跑就记台账退出 0。Brain 自身按产物续跑（`_shared` HAS 探测、RS navigator 从最后产物继续）。
+
+## 14. Phase 6 下放到实验侧（2026-09-07 深夜）
+
+| 步 | skill | 脚本 | 产物 |
+|---|---|---|---|
+| 1.5 起草块 spec | `exp-spec` | `spec_packet.py`（单块起草包）→ Worker 写 `spec/B<k>.json` → `spec_check.py --block --plan`（原 Phase 6 机检 + PLAN ⊆ SPEC） | `spec/<Bk>.packet.md`、`spec/<Bk>.json` |
+
+导航：`next.py` 领块前若 `spec/<Bk>.json` 不存在 → `exp-spec`；存在 → `exp-next`（precheck 用同一个 `spec_check.py` 复核并封印）。合同 = `.research/tools/exp/refs/spec_contract.md`（Brain Phase 6 提示词逐字）。上下文：起草包按块切片（计划本块 + 映射 claims + 方法视图 + 可实现性 + substrate + 仓库地图），单块约 60–120 KB，不用整份 evidence_plan / implementability；同一窗口连续起草多块时，包之外不再重读。

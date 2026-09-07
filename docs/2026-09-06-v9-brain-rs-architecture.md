@@ -384,3 +384,13 @@ Workflow({scriptPath: '.claude/workflows/brain.workflow.js',
 **Phase 6 三刀**（结构不动）：substrate 是事实源、REPOSITORY MAP 定位、Read 只用来确认将要点名的函数/行，禁止 Glob/Grep 探索；修复 = 只改点名项（PATCH）；effort medium。第四刀（只写 B1 + index，后续块按需补写）留待 Brain 重入机制设计后再做。
 
 **位置戳**：每个席位提示词带 `SEAT #n of this run`——`resumeFromRunId` 的缓存按 prompt 回放，RS 重试周期复用同一批路径，没有它会回放已归档的裁决（ccf 19:05 那次）。
+
+## 9k. Phase 6 下放 + 审计席读取上限（2026-09-07 深夜；33 项测试全绿）
+
+owner 判决："Phase 6 做了太多不该做的事；RS + ARIS 足够，CCF 顶多是提示词加强；下放。"
+
+- **Brain 到 Phase 5 为止**（cards + evidence_plan + plan_check）。spec 席、SPEC_CHECK_PY、ASI 三份引用、BANK.spec 全部离开 Brain；Opus 每 idea 省 50–105 分钟；Brain 的完成标记 = `brain.done.json`，k=1 的 brain_done 看 `phase5/evidence_plan.json`。
+- **实验侧新步 `exp-spec`**（Worker = GLM 主窗口）：`spec_packet.py` 生成单块起草包（计划的本块条目 + 映射的 claims + kill_conditions/frozen_untouched + method_view + 可实现性点 + substrate + intake + FROZEN + 仓库地图），按 **原 Phase 6 提示词逐字**（`.research/tools/exp/refs/spec_contract.md`）写 `spec/B<k>.json`，`spec_check.py --plan` 把关。一次一块（懒出块自然成立）。
+- **PLAN ⊆ SPEC**（`spec_check.py` 新增，确定性）：keep_if_all 的数字只能来自本块 keep_rule；kill_condition 是计划里的一条；forbids 覆盖 frozen_untouched；负对照臂对应计划的负对照。Worker 只补工程，科学决定动不了（ARFT R3）。之后照旧 `/exp-next` 封印 + `/exp-critic spec`（Grok 跨族审）。
+- **审计席读取上限**：K3 的输入 = 原 emit 输入去掉 phase0 语料 + `lit_table_slice.md`（碰撞命中论文的行）+ 紧凑包；READ BUDGET 行禁止读列表之外的文件、禁止重复读。Sol 只有包（见 §9j）。
+- CCF 引用保留（rank / P5 / 3.2 的 strict_review 等），实测它们不花墙钟；砍不砍是内容判断，不是时间判断。

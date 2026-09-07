@@ -185,7 +185,7 @@ def test_critic_md_is_assembled_from_sources():
 
 
 def test_skills_exist_and_point_at_the_scripts():
-    for name in ("exp-next", "exp-build", "exp-critic", "exp-launch", "exp-verdict", "exp-handoff"):
+    for name in ("exp-next", "exp-spec", "exp-build", "exp-critic", "exp-launch", "exp-verdict", "exp-handoff"):
         p = WS / ".claude" / "skills" / name / "SKILL.md"; t = p.read_text()
         assert t.startswith("---\nname: " + name), name
     assert "precheck.py" in (WS / ".claude/skills/exp-next/SKILL.md").read_text() and "launch.sh" in (WS / ".claude/skills/exp-launch/SKILL.md").read_text()
@@ -205,8 +205,8 @@ def _set(tmp_path: Path, xid: str, **kw):
 def test_navigator_state_machine(tmp_path):
     root = make_run_root(tmp_path); env = {"EXP_SANDBOX": str(tmp_path)}
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
-    # BRAIN phase: hide the spec index
-    (root / "r1" / "spec" / "index.json").rename(root / "r1" / "spec" / "index.bak")
+    # BRAIN phase: hide the evidence plan (k=1: the plan is the Brain's last product now that specs are drafted on this side)
+    (root / "r1" / "phase5" / "evidence_plan.json").rename(root / "r1" / "phase5" / "evidence_plan.bak")
     d = _nav(root, env); assert d["phase"] == "BRAIN" and d["skill"] == "brain" and any("brain.workflow.js" in c for c in d["run"])
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "<paste the ## FROZEN block here>", "k": 1}, open(root / "args.json", "w"))
     d = _nav(root, env); assert d["phase"] == "BRAIN" and d["blocked"] and "FROZEN" in d["note"]          # placeholder goal never launches the Brain
@@ -222,13 +222,21 @@ def test_navigator_state_machine(tmp_path):
     r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0 and "stale" in r.stdout, r.stdout
     r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); assert r.returncode == 0 and not (root / "brain.lock").exists()
     # artifacts present but a fresh lock: still WAIT (the Brain writes spec/index.json before its last repair); brain.done.json ends the wait
-    (root / "r1" / "spec" / "index.bak").rename(root / "r1" / "spec" / "index.json")
+    (root / "r1" / "phase5" / "evidence_plan.bak").rename(root / "r1" / "phase5" / "evidence_plan.json")
     r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0
     d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 900 and "nothing to claim" in d["state"], d
     (root / "brain.done.json").write_text("{}"); d = _nav(root, env); assert d["phase"] == "EXPERIMENT" and d["skill"] == "exp-next", d
-    r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); (root / "r1" / "spec" / "index.json").rename(root / "r1" / "spec" / "index.bak")
+    r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); (root / "r1" / "phase5" / "evidence_plan.json").rename(root / "r1" / "phase5" / "evidence_plan.bak")
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
-    (root / "r1" / "spec" / "index.bak").rename(root / "r1" / "spec" / "index.json")
+    (root / "r1" / "phase5" / "evidence_plan.bak").rename(root / "r1" / "phase5" / "evidence_plan.json")
+    # no spec for B1 yet → the Worker drafts it (exp-spec) under the Brain's contract; packet + spec_check are scripts
+    golden = (root / "r1" / "spec" / "B1.json").read_text(); (root / "r1" / "spec" / "B1.json").unlink()
+    d = _nav(root, env); assert d["skill"] == "exp-spec" and "--block B1" in d["skill_args"] and "no spec yet" in d["state"], d
+    r = run(sys.executable, EXP / "spec_packet.py", root, "--run", "r1", "--block", "B1", "--repo", tmp_path / "repo", env=env); assert r.returncode == 0, r.stdout + r.stderr
+    pk = (root / "r1" / "spec" / "B1.packet.md").read_text(); assert "Evidence plan — block B1" in pk and "REPOSITORY MAP" in pk and "PLAN ⊆ SPEC" in pk and "scripts/train.py" in pk
+    (root / "r1" / "spec" / "B1.json").write_text(golden)
+    r = run(sys.executable, EXP / "spec_check.py", root / "r1" / "spec", tmp_path / "repo", '["test_half"]', root / "r1" / "phase4" / "phase4_implementability.json", "--block", "B1", "--plan", root / "r1" / "phase5" / "evidence_plan.json", env=env)
+    assert r.returncode == 0 and r.stdout.startswith("__SPEC_OK"), r.stdout + r.stderr
     # no ledger → claim the first block
     d = _nav(root, env); assert d["skill"] == "exp-next" and "--block B1" in d["skill_args"]
     r = run(sys.executable, EXP / "precheck.py", root, "--repo", tmp_path / "repo", "--x", "X-950", env=env); assert r.returncode == 0, r.stdout
@@ -301,3 +309,23 @@ def test_parse_findings_takes_the_last_complete_document():
     assert mod.parse_findings(json.dumps({"result": one}))["mode"] == "code"                    # wrapped in a result string
     assert mod.parse_findings("noise " + one + one.replace('"findings": []', '"findings": [{"anchor": "a", "class": "C.1", "blocking": true, "note": "n"}]'))["findings"][0]["class"] == "C.1"
     assert mod.parse_findings("nothing here") is None
+
+
+def test_spec_check_plan_binding(tmp_path: Path) -> None:
+    """PLAN ⊆ SPEC: the Worker adds engineering, never science — invented thresholds, foreign kill conditions and uncovered frozen paths are BAD."""
+    repo = tmp_path / "repo"; (repo / "scripts").mkdir(parents=True); (repo / "scripts" / "train.py").write_text("#")
+    plan = {"run_order": ["B1"], "kill_conditions": ["negative control matches the candidate within 0.02"], "frozen_untouched": ["test_half", "m152_eval_rungs.py"],
+            "blocks": [{"block_id": "B1", "keep_rule": "delta > 0.05 with CI95 excluding zero; clean cost <= 0.3", "negative_control": "permuted depth pathway arm", "min_effect": 0.05}]}
+    (tmp_path / "plan.json").write_text(json.dumps(plan)); sd = tmp_path / "spec"; sd.mkdir(); (tmp_path / "impl.json").write_text(json.dumps({"underspecified_points": []}))
+    base = json.load(open(GOLD / "spec_B1.json"))
+    def spec(**kw):
+        d = dict(base); d.update(kw); return d
+    def check(d):
+        (sd / "B1.json").write_text(json.dumps(d))
+        r = run(sys.executable, EXP / "spec_check.py", sd, repo, "[]", tmp_path / "impl.json", "--block", "B1", "--plan", tmp_path / "plan.json"); return r.stdout.strip()
+    ok = spec(verdict_rule=dict(base["verdict_rule"], keep_if_all=[{"key": "delta", "op": "gt", "value": 0.05}, {"key": "candidate_clean_cost", "op": "lte", "value": 0.3}]),
+              kill_condition="negative control matches the candidate within 0.02", forbids=["test_half", "m152_eval_rungs.py"], negctl_arm=base["verdict_rule"]["arms"]["negative_control"])
+    out = check(ok); assert out.startswith("__SPEC_OK"), out
+    out = check(spec(verdict_rule=dict(ok["verdict_rule"], keep_if_all=[{"key": "delta", "op": "gt", "value": 0.9}]))); assert "__SPEC_BAD" in out and "threshold the Worker invented" in out, out
+    out = check(dict(ok, kill_condition="whatever the worker likes")); assert "__SPEC_BAD" in out and "kill_condition is not one of the plan" in out, out
+    out = check(dict(ok, forbids=["test_half"])); assert "__SPEC_BAD" in out and "frozen_untouched" in out and "m152" in out, out

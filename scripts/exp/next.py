@@ -35,7 +35,7 @@ def unit_active(xid: str) -> bool | None:
 def brain_done(root: Path, k: int) -> bool:
     """The workflow writes brain.done.json as its last step; artifacts alone are accepted only for roots finished before that marker existed."""
     if (root / "brain.done.json").exists(): return True
-    return (root / "ranking.json").exists() if k >= 2 else (root / "r1" / "spec" / "index.json").exists()
+    return (root / "ranking.json").exists() if k >= 2 else (root / "r1" / "phase5" / "evidence_plan.json").exists()
 
 
 def dead(X: dict) -> bool:
@@ -61,7 +61,7 @@ def run_candidates(root: Path) -> list[str]:
     top = next((r.get("run") for r in rk.get("ranking") or [] if r.get("rank") == 1), None) or "r1"
     out = [top]
     bk = rk.get("backup_run")
-    if bk and bk != top and (root / bk / "spec" / "index.json").exists(): out.append(bk)
+    if bk and bk != top and (root / bk / "phase5" / "evidence_plan.json").exists(): out.append(bk)
     return out
 
 
@@ -152,7 +152,7 @@ def _navigate(root: Path) -> dict:
             return emit("BRAIN", f"Brain in flight on this root since {lk['started_at']} (last write {lk['quiet_min']} min ago) — nothing to launch", wait_s=900,
                         note=f"another session's Workflow is writing here; /loop 10m /exp-auto or wait; a lock quiet for {BRAIN_STALE_MIN} min counts as dead and the next call resumes from disk")
         stale = f"; stale brain.lock from {lk['started_at']} ({lk['quiet_min']} min without writes): the previous launch died — acquire replaces it and the workflow resumes from the artifacts on disk" if lk["locked"] else ""
-        return emit("BRAIN", "no Brain output yet (ranking.json / r1/spec/index.json missing)" + (f" — lineage round {rnd}, {len(args.get('negative_anchors') or [])} negative anchor(s)" if rnd > 1 else ""),
+        return emit("BRAIN", "no Brain output yet (ranking.json / r1/phase5/evidence_plan.json missing)" + (f" — lineage round {rnd}, {len(args.get('negative_anchors') or [])} negative anchor(s)" if rnd > 1 else ""),
                     skill="brain", skill_args=str(root / "args.json"),
                     run=[f"python3 {EXP}/brain_lock.py {root} acquire   # exit 3 = in flight: do not launch",
                          f'Workflow({{scriptPath: ".claude/workflows/brain.workflow.js", args: <contents of {root / "args.json"}>}})',
@@ -161,7 +161,7 @@ def _navigate(root: Path) -> dict:
     run = pick_run(root)
     if run is None: return after_all_dead(root, args)
     rd = root / run
-    order = (jload(rd / "spec" / "index.json", {}) or {}).get("run_order") or (jload(rd / "phase5" / "evidence_plan.json", {}) or {}).get("run_order") or []
+    order = (jload(rd / "phase5" / "evidence_plan.json", {}) or {}).get("run_order") or (jload(rd / "spec" / "index.json", {}) or {}).get("run_order") or []
     xs = ledger_for(root, run)
     current = next((X for X in reversed(xs) if X.get("status") not in TERMINAL and not dead(X)), None)
     if current: return step_for(current, root)
@@ -171,6 +171,9 @@ def _navigate(root: Path) -> dict:
         return emit("SUPPORTED", f"every block of run_order survived ({', '.join(order)})", run=[f"python3 {EXP}/report.py {root} --run {run}"],
                     note="tables from verdict.json only (CCF result-templates); ablations by evidence_plan.ablations priority next; then the paper stage")
     backup = run != run_candidates(root)[0]
+    if not (rd / "spec" / f"{nxt}.json").exists():                                  # block specs are drafted one at a time on this side (Phase 6 left the Brain 2026-09-07)
+        return emit("EXPERIMENT", f"block {nxt} of {run} has no spec yet — draft it (Worker) under the Brain's contract, then spec_check" + (" (backup run)" if backup else ""),
+                    skill="exp-spec", skill_args=f"{root} --run {run} --block {nxt} --repo {args.get('repo', '')}".strip())
     return emit("EXPERIMENT", f"claim block {nxt} of {run}" + (" (the backup run — the rank-1 run is dead)" if backup else ""), skill="exp-next",
                 skill_args=f"{root} --run {run} --block {nxt} --repo {args.get('repo', '')}".strip())
 

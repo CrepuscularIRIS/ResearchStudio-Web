@@ -6,7 +6,7 @@ export const meta = {
     { title: 'Intake', detail: 'Phase -1: repository → intake.json + substrate.md + queries.json (GLM, read-only tools)' },
     { title: 'Phase 0', detail: 'RS retrieval → pattern tagging shards (GLM) → lit_table_merge → full-text fetch → spawn r1..rK' },
     { title: 'Runs', detail: 'run.py next drives each run: Phase 1 (Opus, r1 only) → 2.1+2.2 (Opus) → citation gate → 2.3 (Opus+python, fallback GLM) ∥ 3.1 → 3.2 (K3 ∥ Sol second auditor, merged; threat quote checked) → 3.3 (Opus) → Phase 4 → validate (repair ≤2) → cards → regression_check' },
-    { title: 'Evidence', detail: 'Phase 5 evidence_plan.json (Opus, fallback GLM) → plan_check → Phase 6 spec/B*.json (Opus, read-only repo, fallback GLM) → spec_check; existing files that pass their check are kept, not regenerated' },
+    { title: 'Evidence', detail: 'Phase 5 evidence_plan.json (Opus, fallback GLM) → plan_check (an existing plan that passes is kept). Block specs are NOT written here any more: the experiment side drafts spec/B<k>.json one block at a time (exp-spec, GLM) under the same contract and the same spec_check, Grok reviews it' },
     { title: 'Rank', detail: 'one Opus seat scores the K ideas with the CCF idea-review rubric + calibration (10 dims, fatal gates, tournament) → rank_check — rank, never kill' },
   ],
 }
@@ -4556,309 +4556,6 @@ Pillars: **P1** Grounding & Faithfulness · **P2** Cognitive Depth & Adaptabilit
 single systemic root cause, **Metacognitive Deficit**. You do not output pillars — they
 are derived from the code.
 ` },
-  asi_task_yaml: { path: "docs/refs/papers/asi-bench/task-exemplar/task.yaml", text: `id: robotics.minimum_snap_trajectory_conditioning
-name: "Minimum-Snap Trajectory Conditioning"
-version: "0.20"
-status: sample
-
-domain: robotics
-subdomain: trajectory_generation
-
-source:
-  paper: "Mellinger and Kumar (2011) Minimum snap trajectory generation and control for quadrotors"
-  repo: null
-
-difficulty:
-  estimated_lines: 180-360
-  estimated_time_minutes: 45-90
-  requires_gpu: false
-  requires_network: false
-
-tags:
-  - trajectory_generation
-  - polynomial_trajectory
-  - numerical_conditioning
-  - quadrotor
-  - convention_traps
-
-runtime:
-  python: ">=3.11"
-  packages:
-    - "numpy>=2.0"
-    - "matplotlib>=3.8"
-
-prompts:
-  b1: prompt_b1.md
-  b2: prompt_b2.md
-  b3: prompt_b3.md
-  b4: prompt_b4.md
-
-input:
-  files:
-    - name: data/observations.csv
-      type: data
-      description: "Noisy timestamped 3D flight-log observations, including outliers."
-    - name: data/waypoint_windows.csv
-      type: data
-      description: "Approximate timing windows for latent trajectory knots."
-    - name: data/constraints.csv
-      type: data
-      description: "Fixed derivative constraints at selected waypoints."
-    - name: data/segment_time_bounds.csv
-      type: data
-      description: "Per-segment duration bounds."
-    - name: data/query_times.csv
-      type: data
-      description: "Times at which reconstructed position and derivatives must be reported."
-    - name: data/task_info.json
-      type: data
-      description: "Polynomial degree, total time, basis convention, axes, quality-metric label and scoring components (the metric formula itself is not disclosed), continuity requirements, and required output schema."
-
-output:
-  files:
-    - name: analysis.py
-      type: code
-      description: "End-to-end implementation."
-    - name: results/knot_times.csv
-      type: data
-      description: "Optimized waypoint times with columns waypoint_id,t."
-    - name: results/segment_coefficients.npy
-      type: data
-      description: "Piecewise polynomial coefficients, shape [n_segments, 3, degree+1], ascending powers of segment elapsed time delta=t-t_start in seconds."
-    - name: results/knot_derivatives.csv
-      type: data
-      description: "Reported one-sided knot derivatives through order 4."
-    - name: results/query_predictions.csv
-      type: data
-      description: "Reconstructed position, velocity, acceleration, and jerk at public query times."
-    - name: results/outlier_scores.csv
-      type: data
-      description: "Outlier likelihood score for every public observation."
-    - name: results/objective.json
-      type: data
-      description: "Self-reported trajectory quality metric per axis and total (numeric values are consistency-checked, not directly scored)."
-    - name: results/trajectory_diagnostics.png
-      type: figure
-      description: "Diagnostic trajectory figure."
-
-evaluation:
-  gates:
-    - scorer: file_match
-      severity: hard
-      config:
-        checks:
-          - {file: analysis.py}
-          - {file: results/knot_times.csv}
-          - {file: results/segment_coefficients.npy}
-          - {file: results/knot_derivatives.csv}
-          - {file: results/query_predictions.csv}
-          - {file: results/outlier_scores.csv}
-          - {file: results/objective.json}
-          - {file: results/trajectory_diagnostics.png}
-          - {check: no_nan_inf}
-    - scorer: code_analysis
-      severity: hard
-      config:
-        target_file: analysis.py
-        checks:
-          - {forbidden_imports: ["scipy", "cvxpy", "casadi", "osqp", "qpsolvers", "quadprog", "sympy", "mpmath", "sklearn", "jax", "torch", "tensorflow"]}
-          - {pattern: "(?i)mav_trajectory_generation|minsnap_trajectories|trajectory[_-]?generation[_-]?toolbox|trajgen", forbidden: true}
-          - {pattern: "(?i)__import__\\\\s*\\\\(|importlib\\\\.", forbidden: true}
-          - {pattern: "(?i)reference[\\\\/]|segment_coefficients_ref|knot_times_ref|objective_ref|query_predictions_ref|labels_hidden|waypoints_ref|audit_times\\\\.npy|instance_meta|residual_field_ref|segment_coefficients_plan_ref", forbidden: true}
-
-  scoring:
-    - scorer: minimum_snap_trajectory_score
-      weight: 100
-      config:
-        coefficients_file: results/segment_coefficients.npy
-        reference_coefficients_file: segment_coefficients_ref.npy
-        knot_times_file: results/knot_times.csv
-        reference_knot_times_file: knot_times_ref.csv
-        knot_file: results/knot_derivatives.csv
-        query_file: results/query_predictions.csv
-        reference_query_file: query_predictions_ref.csv
-        outlier_file: results/outlier_scores.csv
-        outlier_label_file: labels_hidden.csv
-        objective_file: results/objective.json
-        reference_objective_file: objective_ref.json
-        figure_file: results/trajectory_diagnostics.png
-        reference_figure_file: trajectory_diagnostics_ref.png
-        audit_file: audit_times.npy
-
-
-generation:
-  script: generate_gt.py
-  mode: infinite
-  parameters:
-    n_segments:
-      type: int
-      range: [8, 12]
-      default: 10
-    degree:
-      type: choice
-      options: [11]
-      default: 11
-    seed:
-      type: int
-      range: [0, 1000000]
-      default: 0
-` },
-  asi_prompt_b1: { path: "docs/refs/papers/asi-bench/task-exemplar/prompt_b1.md", text: `# Minimum-Snap Flight-Log Reconstruction
-
-## Goal
-
-Reconstruct the latent high-order piecewise polynomial flight trajectory from
-the noisy 3D observations in \`data/observations.csv\`. Some observations are
-outliers and some time intervals are under-sampled. The submitted trajectory
-must use the coefficient convention, total time, continuity requirements, and
-quality metric declared in \`data/task_info.json\`; knot times must lie inside
-\`data/waypoint_windows.csv\`, and each segment duration must satisfy
-\`data/segment_time_bounds.csv\`.
-
-The latent trajectory is an imperfectly tracked realization of a
-minimum-snap flight plan, and the tracker loses lock during aggressive
-maneuvers: the observation stream has dropout gaps, and inside each gap the
-vehicle departs from the smooth plan by a deterministic deviation bump
-before re-anchoring at the bounding waypoints. Fit piecewise polynomials
-that explain the reliable observations subject to C0-C3 continuity at
-interior knots and the fixed derivative constraints in
-\`data/constraints.csv\`, then reconstruct the in-gap deviations from the
-disclosed law below. Down-weight suspected
-outliers with an iteratively reweighted robust loss and map the final
-normalized residuals monotonically into \`[0, 1]\` for the outlier scores (the
-evaluator clips scores to \`[0, 1]\` before ranking). Choose the knot times yourself:
-segment durations are free within their bounds and should be optimized against
-the combined data-fit plus quality-metric objective.
-
-The tracking-deviation law for this instance:
-
-- Dropout mechanism: observations are unavailable wherever the deviation
-  magnitude exceeds {{ residual_occlusion_level_m }} m, and each gap is
-  widened by a 0.12 s guard margin on both sides.
-- Bump shape: within an affected segment of duration \`d\` (local time
-  \`delta\`), the deviation is
-  \`A * 256 * delta^4 * (d-delta)^4 / d^8 * (1 + s*(delta/d - 0.5)) * u\`
-  with skew \`s = {{ residual_skew }}\`. It vanishes together with its first
-  three derivatives at both knots, so knot states, continuity, and the
-  fixed constraints are unaffected.
-- Direction \`u\`: take the segment's knot-to-knot chord and normalize the chord's xy projection to a UNIT vector first, rotate that
-  unit vector about the vertical axis by {{ residual_azimuth_deg }} degrees,
-  then append {{ residual_z_comp }} as the third (vertical) component and
-  normalize the resulting 3-vector.
-  (Order matters: the xy projection is normalized BEFORE the vertical
-  component is appended - appending it to the raw meter-scale chord would
-  dilute the vertical part several-fold.)
-- Amplitude \`A\` (one per gap): the gap edges are the level crossings of the
-  bump at the dropout threshold. Estimate the dilated window as the
-  observed gap minus one local sampling interval, strip the two 0.12 s
-  margins, and solve \`A\` from the crossing width of the disclosed shape by
-  bisection.
-- Two facts that decide success: (i) the gap interiors are unobserved -
-  any fit freedom there beyond the disclosed structure will swing freely,
-  so keep the plan itself smooth through each gap (strong snap
-  regularization, or restrict the plan to the knot-state Hermite family)
-  and let the disclosed bump carry ALL of the in-gap deviation; (ii) the
-  bumps dominate the snap integral - compute the submitted objective from
-  the final coefficients WITH the bumps included.
-
-Key facts:
-
-- The quality metric (undisclosed in \`data/task_info.json\`) is the time
-  integral of squared derivative order 4. If
-  \`segment_coefficients.npy\` stores ascending powers of elapsed segment time
-  \`delta = t - t_start\`, then for powers \`p,r >= 4\` each segment contributes
-  \`c[p] * c[r] * falling(p,4) * falling(r,4) * duration**(p+r-7) / (p+r-7)\`,
-  where \`falling(p,k) = p*(p-1)*...*(p-k+1)\`.
-- Observation coordinates carry constant offsets of order \`1e6\` while the
-  local motion spans only a few meters. Do the linear algebra in centered
-  coordinates and add the offset back when writing outputs, or the solves lose
-  all precision.
-- Evaluation compares POSITIONS against the latent reference at hidden
-  held-out times across the full duration; times inside the dropout gaps
-  dominate (about 70% of the trajectory component, which itself carries
-  ~41% of the score, and much of the ~30% query component). In-gap position
-  RMS earns full credit below 0.05 m and zero above 0.16 m; outside the
-  gaps full credit below 0.02 m and zero above 0.10 m. Higher derivatives
-  are not compared against the reference, but the submitted artifacts
-  (knot derivatives, query predictions, objective) must be recomputed
-  from the saved coefficients so the reports stay consistent.
-
-## Output
-
-Write \`analysis.py\` and create \`results/\` containing:
-
-1. \`results/knot_times.csv\` with columns \`waypoint_id,t\`.
-2. \`results/segment_coefficients.npy\` with shape \`[n_segments, 3, degree+1]\`.
-3. \`results/knot_derivatives.csv\` with columns \`waypoint_id,axis,side,derivative_order,value\`.
-4. \`results/query_predictions.csv\` with columns \`query_id,t,x,y,z,vx,vy,vz,ax,ay,az,jx,jy,jz\`.
-5. \`results/outlier_scores.csv\` with columns \`observation_id,outlier_score\`, one row per observation, where larger values indicate more likely outliers.
-6. \`results/objective.json\` with keys \`metric\`, \`basis\`, \`per_axis\`, and \`total\`.
-7. \`results/trajectory_diagnostics.png\`.
-
-Use only the Python standard library, NumPy, and Matplotlib for the diagnostic
-figure. Do not import SciPy, CVXPY, CasADi, OSQP, SymPy, mpmath, machine-learning
-frameworks, or dedicated trajectory-generation packages. Do not use dynamic imports such as \`importlib\` or \`__import__\`.
-` },
-  asi_how_scoring: { path: "docs/refs/papers/asi-bench/guide/how-scoring-works.md", text: `# How Scoring Works
-
-ASI-Bench has two explicit scoring contracts: seed31415 publishes references
-for local scoring, while seed42 keeps references private and uses authenticated
-website scoring.
-
-## The split
-
-| Layer | Public? | What it is |
-|---|---|---|
-| Framework — runner, sandboxes, output collection and submission | **Public** | The machinery for executing agents and packaging their outputs. |
-| Task **metadata + prompts + input data** | **Public** | What an agent needs to attempt a task. |
-| Task **scoring/output contract + custom scorers** | **Public** | Auditable gates, weights, tolerances, and scorer implementation, without generation or reference content. |
-| Evaluator-only runtime helpers | **Public when allowlisted** | Shared parsing, simulation, or metric code needed by a scorer; no GT generation, reference builder, hidden reference policy, or seed-to-instance API. |
-| seed31415 reference answers | **Public on Hugging Face** | Reproducible local scoring with GitHub scorers. |
-| seed42 reference answers, all \`generate_gt.py\`, generation settings, reference specs, private solver assets | **Private** | Website-only answer material and everything needed to create it. |
-
-The ASI-Bench website owns seed42 evaluation and uses private references.
-seed31415 local scoring is deliberately public but marked non-official.
-
-## Who scores, and when
-
-1. You run either seed in produce-only mode (\`asibench run\`).
-2. For seed31415, \`asibench score --repo seed31415\` uses the pulled public
-   references and this checkout's GitHub scorers, writing a separate report.
-3. For seed42, \`asibench login\` identifies the submitter and \`asibench submit\` uploads an
-   authenticated draft to the ASI-Bench website. The CLI validates every
-   instance ID and rejects seed31415, unknown, or mixed-seed result directories
-   before it builds a bundle or reads credentials.
-4. You **confirm** the submission in the browser; it enters the website's scoring
-   queue and is evaluated against private task material.
-5. The confirmed, officially scored run can be published to the leaderboard.
-
-**Self-reported scores are never trusted.** A run only appears on the leaderboard
-after scoring through the ASI-Bench website.
-
-## Why the seeds differ
-
-seed31415 is the open evaluation split: public references make scorer behavior
-fully reproducible. seed42 is the protected evaluation split: public scoring
-logic remains auditable, but references are only available to the website.
-Only seed42 can enter \`asibench submit\`; seed31415 remains local and
-non-official. Neither split publishes GT generators or private solver assets.
-
-The runtime boundary is data-driven: a public scorer receives an already
-materialized instance and reference directory. It cannot accept a seed or call
-\`generate_gt.py\` to reconstruct either one. Tasks whose original implementation
-mixed evaluation and reference construction expose only the extracted
-evaluator-only runtime. Generic submission sandboxing is also public because it
-isolates submitted code without containing task answers.
-
-## Reproducibility
-
-Ground-truth answers are deterministic: given the same parameters and random seed,
-a task's \`generate_gt.py\` produces the same reference every time. Scoring compares
-your outputs to that reference **with tolerances**, so minor, environment-level
-floating-point differences do not change the score. Runs also record full
-provenance (agent, model, effort, sandbox, framework version) so a result can be
-reproduced and fairly compared to others in the same bucket.
-` },
   intake: { path: "brain/intake.md", text: `You are the repository intake seat (Phase −1) of the V9 Brain. You are running inside a code repository with read-only tools (Read, Glob, Grep). Your job is to turn this repository plus the brief below into the three artifacts ResearchStudio's Phase 0/1 expect from a user, so that the rest of the pipeline can run exactly as if a researcher had described the problem in text.
 
 ## Brief
@@ -4988,41 +4685,6 @@ Write ranking.json to the output path (numbers, never prose, in the numeric fiel
 
 Rules: every run appears exactly once with ranks 1..K; the ten dimension keys and their weights are exactly rubric.md's (12/14/12/14/8/8/10/8/6/8 — a script recomputes weighted_score from your scores and rejects a mismatch, a missing deduction block for a score <= 3, and a recommendation that ignores a fatal gate); rank order follows the tournament rule (serious-risk-adjusted, strongest fixable path), ties broken toward the cheaper first block; every idea carries the five panel notes and a synthesis (a script rejects fewer than five); do not rewrite, merge, or kill ideas — ranking is advisory for the Worker session.` }
 
-BANK.spec = { path: 'brain/spec.md', text: `You are the Phase 6 seat of the V9 Brain: the block-spec author. The idea has passed ResearchStudio's gauntlet and Phase 5 wrote evidence_plan.json (claims, blocks, arms, keep rules). Your job is the ASI-Bench "B1" level of that plan: for EVERY block in evidence_plan.json write spec/B<k>.json — a specification a coding agent can implement WITHOUT making any scientific decision itself. The plan IS the experiment: steps are file-level and executable as written; run_cmd and smoke_cmd are copy-paste runnable; the implementer may make ENGINEERING decisions only — any SCIENTIFIC decision the spec leaves open is a defect of the spec, so if a decision must be delegated, list it in decision_points with a default value. substrate.md is your fact source (it already holds the file:line facts Phase -1 extracted) and the REPOSITORY MAP input lists every source file: use them to NAME files, and use Read only to CONFIRM a function, line or config you are about to name — never to explore, never Glob/Grep to discover what the repository contains. You never run anything and never edit repository files. You write only under RUN_DIR/spec/.
-
-Each spec/B<k>.json:
-{
-  "block_id": "B1", "claim_id": "C1",
-  "goal": "<one sentence: what this block settles>",
-  "tests_premise": "<the premise from the card's PREMISES ledger this block tests>",
-  "anti_claim": "<the sentence that, if true, ends the idea — copied from the card's negative control / kill condition>",
-  "method": {"equations": ["<the equation(s) this block exercises, copied from method_view.json>"], "steps": ["<method_view step ids in execution order, each with one sentence of what the code does>"]},
-  "changes": [{"file": "<repo-relative path that exists>", "function": "<existing function/class or NEW>", "what": "<exact change>", "tensor_shapes": "<in → out>"}],
-  "run_cmd": "<the FULL command from the repository's existing launchers, arguments spelled out; NEVER set a SMOKE variable yourself — the Worker's launch wrapper does>",
-  "smoke_cmd": "<the smallest NOT_A_RESULT run that proves the wiring: same launcher, minutes not hours, what must print>",
-  "arms": [{"name": "...", "config": "<exact config/flag values>", "what_changes": "..."}],
-  "baselines": ["<config names from substrate.md>"],
-  "negctl_arm": "<name of the arm in arms[] that MUST fail: it operates on the load-bearing variable and predicts the downstream metric returns to baseline>",
-  "attribution": "<the control that says WHY it worked (parameter-free / permuted / capacity-matched)>",
-  "verdict_rule": {
-    "outcome_metric": "<metric + direction, verbatim from the FROZEN goal>",
-    "arms": {"candidate": "<arm name>", "control": "<arm name>", "negative_control": "<arm name>"},
-    "keep_if_all": [{"key": "<m158 verdict.json key>", "op": "gt|gte|lt|lte|eq", "value": <number or boolean>}],
-    "split": "<dev or test half, per FROZEN>", "seeds": [<seed list>], "mde_source": "<where the noise floor comes from>"
-  },
-  "kill_condition": "<one observable outcome that ends this block, from evidence_plan.kill_conditions>",
-  "decision_points": [{"name": "<engineering choice left to the implementer>", "default": "<value to use unless blocked>", "why_engineering": "<why this cannot change which claim the result supports>"}],
-  "open_holes": [{"step_id": "S3", "hole": "<from phase4_implementability.json underspecified_points with severity open>", "resolution": "<the choice you make here, with the file:line fact it rests on>", "blocked": null}],
-  "forbids": ["<paths, splits, scripts the implementation must never touch or read>"],
-  "outputs": [{"file": "...", "schema": "..."}],
-  "gates": [{"name": "...", "severity": "hard", "check": "file_exists|no_nan_inf|forbidden_import|forbidden_pattern|key_present", "config": {"file": "<for file_exists / key_present / no_nan_inf>", "key": "<for key_present>", "pattern": "<regex, for forbidden_pattern>", "imports": ["<for forbidden_import>"]}}],
-  "gpu_h": <number>
-}
-Also write spec/index.json: {"blocks": ["B1", ...], "run_order": [...], "first_block": "B1"}.
-
-keep_if_all keys are the keys the repository's verdict instrument writes (see instruments/README.md if present; typical: delta, ci_lo, ci_hi, both_rungs_exclude_zero, per_rung.<rung>.ci_lo, candidate_clean_cost, negctrl_delta, negctrl_ci_lo, networks_keep); ops are gt/gte/lt/lte/eq; every rule is a number or boolean, never prose.
-
-Rules: every path in changes[] and run_cmd must exist in the repository (you verified it in the REPOSITORY MAP input or with Read) — a file the block itself creates is written with "function": "NEW file" and lives in a directory that exists; locate files in the REPOSITORY MAP, never by crawling with Glob/Grep; never invent a launcher — if the repository lacks one, say so in smoke_cmd and name the closest existing script; forbids must include the test half and every protected evaluation script named in substrate.md; every underspecified point with severity "open" in phase4_implementability.json appears in open_holes with a resolution or with "blocked" set; the first block in index.json is the cheapest test that can kill the idea; do not change any scientific decision of the evidence plan — if a block cannot be specified, write it with "blocked": "<why>" instead of guessing. gates follow the ASI-Bench evaluation.gates form (task.yaml inlined below): hard, structural, script-checkable — one file_exists gate per outputs[] entry, one forbidden_pattern or forbidden_import gate per forbids[] entry, no_nan_inf on every numeric result file — never a science check; the B1 prompt inlined below shows the completeness a procedure must reach (every convention, law and constant disclosed); and per how-scoring-works.md self-reported scores are never trusted: the verdict instrument reads result files, never the Worker's summary.` }
 
 // Deterministic checks (run by the runner; they print __PLAN_OK / __PLAN_BAD, __SPEC_OK / __SPEC_BAD, __QUOTE ...).
 const PLAN_CHECK_PY = `import json, re, sys
@@ -5092,77 +4754,6 @@ txt = json.dumps(e).lower()
 if "attribution" not in txt and "parameter-free" not in txt: warn.append("no attribution control anywhere in the plan (X.6)")
 print(("__PLAN_BAD " if bad else "__PLAN_OK ") + " | ".join(bad + ["warn: " + w for w in warn]))`
 
-const SPEC_CHECK_PY = `import json, os, re, sys, glob
-spec_dir, repo, forbidden, impl_path = sys.argv[1], sys.argv[2], json.loads(sys.argv[3]), sys.argv[4]
-bad, warn = [], []
-files = sorted(glob.glob(os.path.join(spec_dir, "B*.json")))
-if not files: bad.append("no spec/B*.json")
-if not os.path.exists(os.path.join(spec_dir, "index.json")): bad.append("spec/index.json missing")
-need = ["block_id", "goal", "method", "changes", "run_cmd", "smoke_cmd", "arms", "baselines", "negctl_arm", "verdict_rule", "kill_condition", "decision_points", "open_holes", "forbids", "outputs", "gates", "gpu_h"]
-gk = {"file_exists", "no_nan_inf", "forbidden_import", "forbidden_pattern", "key_present"}
-ops = {"gt", "gte", "lt", "lte", "eq"}
-open_holes = set()
-try:
-    impl = json.load(open(impl_path))
-    for u in impl.get("underspecified_points") or []:
-        if str(u.get("severity")) == "open": open_holes.add(str(u.get("step_id")) + "|" + str(u.get("hole"))[:60])
-except Exception:
-    pass
-covered = set()
-for f in files:
-    try: d = json.load(open(f))
-    except Exception as ex: bad.append(os.path.basename(f) + " unreadable: " + str(ex)[:80]); continue
-    n = os.path.basename(f)
-    if d.get("blocked"): warn.append(n + " blocked: " + str(d["blocked"])[:100]); continue
-    for k in need:
-        if k not in d or d[k] in ("", {}, None): bad.append(n + " missing " + k)
-    for ch in d.get("changes") or []:
-        fp = str(ch.get("file") or "")
-        creates = bool(ch.get("new")) or bool(re.match(r"^\\s*NEW\\b", str(ch.get("function") or ""), re.I))
-        if fp and creates:
-            parent = os.path.dirname(os.path.join(repo, fp))
-            if not os.path.isdir(parent) and not os.path.isdir(os.path.dirname(fp)): warn.append(n + " new file in a directory that does not exist yet: " + fp)
-        elif fp and not os.path.exists(os.path.join(repo, fp)) and not os.path.exists(fp): bad.append(n + " change file not found: " + fp + " (a file the block creates must say function: NEW)")
-    for key in ("run_cmd", "smoke_cmd"):
-        cmd = str(d.get(key) or "")
-        if re.search(r"(^|\\s)SMOKE=", cmd): bad.append(n + " " + key + " sets SMOKE itself")
-        tok = [t for t in re.split(r"\\s+", cmd) if t and not t.startswith("-")]
-        scripts = [t for t in tok if t.endswith(".py") or t.endswith(".sh")]
-        for sc in scripts[:1]:
-            if not os.path.exists(os.path.join(repo, sc)) and not os.path.exists(sc): bad.append(n + " " + key + " script not found: " + sc)
-    blob = json.dumps({"run_cmd": d.get("run_cmd"), "smoke_cmd": d.get("smoke_cmd"), "arms": d.get("arms")}).lower()
-    for pat in forbidden:
-        if pat.lower() in blob: bad.append(n + " mentions forbidden pattern in run_cmd/smoke_cmd/arms: " + pat)
-    names = {str(a.get("name")) for a in (d.get("arms") or []) if isinstance(a, dict)}
-    vr = d.get("verdict_rule") or {}
-    roles = vr.get("arms") or {}
-    for role in ("candidate", "control", "negative_control"):
-        if str(roles.get(role)) not in names: bad.append(n + " verdict_rule.arms." + role + " is not an arm name")
-    if str(d.get("negctl_arm")) not in names: bad.append(n + " negctl_arm is not an arm name")
-    kia = vr.get("keep_if_all") or []
-    if not kia: bad.append(n + " verdict_rule.keep_if_all empty")
-    for r in kia:
-        if not isinstance(r, dict) or not r.get("key") or r.get("op") not in ops or not isinstance(r.get("value"), (int, float, bool)) or isinstance(r.get("value"), str):
-            bad.append(n + " keep_if_all rule not machine-readable: " + json.dumps(r)[:80])
-    if not isinstance(vr.get("seeds"), list) or not vr.get("seeds"): bad.append(n + " verdict_rule.seeds missing")
-    if not isinstance(d.get("decision_points"), list): bad.append(n + " decision_points not a list")
-    for dp in d.get("decision_points") or []:
-        if not isinstance(dp, dict) or dp.get("default") in (None, ""): bad.append(n + " decision_point without default")
-    gates = [g for g in (d.get("gates") or []) if isinstance(g, dict)]
-    for g in gates:
-        if g.get("check") not in gk or g.get("severity") not in ("hard", "soft"): bad.append(n + " gate not machine-readable: " + json.dumps(g)[:80])
-    gated = {str((g.get("config") or {}).get("file")) for g in gates if g.get("check") == "file_exists"}
-    for o in d.get("outputs") or []:
-        if isinstance(o, dict) and str(o.get("file")) not in gated: warn.append(n + " output without a file_exists gate: " + str(o.get("file")))
-    if d.get("forbids") and not any(g.get("check") in ("forbidden_pattern", "forbidden_import") for g in gates): bad.append(n + " forbids listed but no forbidden_pattern/forbidden_import gate")
-    for h in d.get("open_holes") or []:
-        if isinstance(h, dict):
-            covered.add(str(h.get("step_id")) + "|" + str(h.get("hole"))[:60])
-            if not h.get("resolution") and not h.get("blocked"): bad.append(n + " open hole neither resolved nor blocked: " + str(h.get("step_id")))
-if open_holes and files:
-    miss = [h for h in open_holes if not any(h.split("|")[0] == c.split("|")[0] for c in covered)]
-    if miss: bad.append("implementability open holes not addressed in any spec: " + ", ".join(m.split("|")[0] for m in miss))
-print(("__SPEC_BAD " if bad else "__SPEC_OK ") + " | ".join(bad + ["warn: " + w for w in warn]))`
 
 const QUOTE_CHECK_PY = `import json, os, re, sys
 doc_path, p0 = sys.argv[1], sys.argv[2]
@@ -5286,7 +4877,15 @@ for h in sorted([h for h in (hits or []) if isinstance(h, dict)], key=score, rev
     r["abstract"] = cap(h.get("abstract") or h.get("snippet") or "", 600); rows.append(r)
 parts += ["## Collision hits (top 20 by score, abstracts cut at 600 chars — the threat quote comes from here or is null)", "\\x60\\x60\\x60json", cap(json.dumps(rows, indent=1, ensure_ascii=False), 30000), "\\x60\\x60\\x60", ""]
 txt = "\\n".join(parts); open(out, "w", encoding="utf-8").write(txt)
-print("PACKET", len(txt), "chars", len(rows), "hits")
+ids = {str(h.get("paper_id") or h.get("id") or "") for h in (hits or []) if isinstance(h, dict)}
+kept, lt = [], rd + "/phase0/lit_table.md"
+try:
+    for ln in open(lt, encoding="utf-8"):
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        if ln.startswith("|---") or (cells and (cells[0] == "paper_id" or cells[0] in ids)): kept.append(ln.rstrip("\\n"))
+except Exception: kept = ["(lit_table.md unavailable)"]
+open(rd + "/phase3_critique/lit_table_slice.md", "w", encoding="utf-8").write("\\n".join(kept) + "\\n")
+print("PACKET", len(txt), "chars", len(rows), "hits", "slice", max(0, len(kept) - 2), "rows")
 `
 const RANK_CHECK_PY = `import json, sys
 p, runs = sys.argv[1], json.loads(sys.argv[2])
@@ -5510,7 +5109,6 @@ const SEATS = {
   intake:    { model: MODEL.glm, effort: 'medium', tools: 'repo',      prompts: ['intake'], refs: ['intake_routing', 'intent_recognition', 'ccf_idea_intake', 'aris_compute_env', 'aris_evidence_precheck'] },
   evidence:  { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'readwrite', prompts: ['evidence_plan'], refs: ['ccf_evidence_design', 'ccf_result_templates', 'aris_experiment_plan', 'aris_ablation_planner'] },   // Phase 5 evidence contract: Opus, GLM if Opus fails (owner 2026-09-07)
   rank:      { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['rank'], refs: ['ccf_idea_rubric', 'ccf_idea_calibration', 'ccf_strict_review', 'ccf_expert_panel', 'ccf_review_output_standards', 'ccf_venue_adapters', 'ccf_lit_evolution'] },
-  spec:      { model: MODEL.opus, fallback: MODEL.glm, effort: 'medium', tools: 'spec', prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },   // Phase 6 B1 spec against the code (read-only): Opus, GLM if Opus fails; medium — contract writing, not taste (owner 2026-09-07)
 }
 // args.seat_models = { <seat>: 'opus' | 'glm' | 'k3' | 'sol' | 'astra' } moves a seat to another routed model without regenerating
 // (quota is a per-day fact, not a design fact); the seat's fallback is untouched.
@@ -5630,7 +5228,7 @@ function brainContext(kind, runId) {
     c.push('SCOPE CHECK (Brain addition, judged like a hard floor): besides the five checks, test the candidate against the FROZEN GOAL below — its contribution type, its "out of scope" list, its protocol and its baselines. A candidate that is out of scope (for example a training-free method, a mechanism/audit/benchmark paper, a change to the protocol or metric) is verdict=abandon with the reason recorded under verdict_rationale as "scope_check"; a candidate that drifts partly is a revision_target with scope=tactical naming the drift.')
     c.push(second
       ? 'THREAT QUOTE (Brain addition): paper_pointed_threat carries two extra fields — "evidence_quote": one verbatim sentence (at most 40 words) copied exactly from a collision-hit abstract in the packet (the sentence the subsumption argument rests on; for a title-only hit, the exact title) and "quote_source": "collision_hits". Copy, never paraphrase, never from memory; when no threat is found leave both null.'
-      : 'THREAT QUOTE (Brain addition, checked mechanically afterwards): paper_pointed_threat carries two extra fields — "evidence_quote": one verbatim sentence (at most 40 words) copied exactly from the threat paper\'s abstract as it appears in lit_table.md or in the collision hits, or from its full text under phase0/fulltext/ — the sentence the subsumption argument rests on (for a title-only hit with no abstract, the exact title); and "quote_source": "lit_table" | "collision_hits" | "fulltext". Copy, never paraphrase, never from memory; when no threat is found leave both null.')
+      : 'THREAT QUOTE (Brain addition, checked mechanically afterwards): paper_pointed_threat carries two extra fields — "evidence_quote": one verbatim sentence (at most 40 words) copied exactly from the threat paper\'s abstract as it appears in the lit_table slice or in the collision hits (the packet) — the sentence the subsumption argument rests on (for a title-only hit with no abstract, the exact title); and "quote_source": "lit_table" | "collision_hits". Copy, never paraphrase, never from memory; when no threat is found leave both null.')
     if (!second) c.push('REVIEW DISCIPLINE (CCF strict-idea-review and problem-method blueprint, inlined below): the No-Filler Rule applies to verdict_rationale and to every revision_target — each material criticism names the exact claim or mechanism under review, the closest prior art or missing evidence, why a strict reviewer would deduct, the concrete repair or pivot, and what would change the verdict; generic phrases without those anchors are not allowed. Add to the output JSON the field "ccf_coherence_filter" — the six Coherence Filter checks of the blueprint as {"check": "<the check>", "pass": true|false, "evidence": "<one line>"} — and "fatal_idea_risks": the Fatal Idea Risks of the blueprint that apply, each with its anchor (empty list when none). These fields inform verdict_rationale; they do not replace the five RS checks or the two-layer verdict.')
     if (NEGATIVE_ANCHORS.length) c.push('NEGATIVE ANCHORS (Brain addition, judged like a hard floor): the failure cards at ' + NEGATIVE_ANCHORS.join(', ') + ' record mechanisms that were built and run on this repository and died. A candidate that re-proposes a carded mechanism, or a variant that does not address the card\'s recorded failure reason, is verdict=abandon with the reason recorded under verdict_rationale as "negative_anchor:<card>"; a candidate that addresses the recorded reason must say how, and that sentence is a revision_target if it is missing.')
     if (!second) c.push('ARFT CODES (the ARFT operational guide is inlined below): give every blocking finding and every revision_target the field "arft_code" — the failure pattern it instantiates when one applies (ideation-stage codes A.1–A.6, cross-stage X.2 goal drift / X.5 teleological reasoning / X.6 right-for-the-wrong-reason; apply the §3 discrimination rules and the §4 Do-NOT-label list; infrastructure is never a code), null when none fits. The codes travel unchanged into the Worker session\'s failure cards, so precision beats coverage.')
@@ -5642,14 +5240,11 @@ function brainContext(kind, runId) {
     c.push('SUBSTRATE: ' + SHARED + '/substrate.md — additionally check the "substrate:" premise against it: if the named operator or structure does not exist as described, that is a blocking finding (reading_robust).')
     c.push('SIZE DISCIPLINE (Brain addition): the report stays under 40 KB — the executed script and its stdout appear once, verbatim, and nothing else large; write it once when it is final.')
   }
-  if (kind === 'spec') {
-    c.push('EVIDENCE PLAN: ' + (runId ? ROOT + '/' + runId + '/phase5/evidence_plan.json' : '') + ' — one spec/B<k>.json per block, in run_order.')
-  }
   if (kind === 'fill') {
     c.push('SUBSTRATE: ' + SHARED + '/substrate.md — feasibility_validation is judged against this compute envelope and these existing baselines, not against the RS factory default.')
     c.push('KEY EQUATIONS DISCIPLINE (ARIS formula-derivation, inlined below): for every key_equations entry the description states the invariant object the equation is written over and the assumptions it uses, and labels the step as identity / proposition / approximation / interpretation; the linked method_flow step\'s why_this_step names the condition under which the equation stops holding (its failure condition). Never hide a gap with "clearly" or "similarly"; an equation whose assumptions cannot be stated is labelled approximation, not proposition. This is the derivation line the Phase 6 spec copies into tests_premise.')
   }
-  if (BRIEF.goal && ['phase1', 'ideate', 'generate', 'audit', 'audit_second', 'revise', 'fill', 'evidence', 'spec', 'rank'].includes(kind)) {
+  if (BRIEF.goal && ['phase1', 'ideate', 'generate', 'audit', 'audit_second', 'revise', 'fill', 'evidence', 'rank'].includes(kind)) {
     c.push('FROZEN GOAL (verbatim; binding on contribution type, protocol, baselines and keep rule):\n' + BRIEF.goal)
   }
   return c
@@ -5780,7 +5375,7 @@ const ideateTurn = RUN_IDS.map(() => { let res; const p = new Promise((r) => { r
 
 async function driveRun(id) {
   const rd = ROOT + '/' + id
-  const st = { id, state: 'running', steps: 0, seats: [], fallbacks: [], audit_merge: null, note: '', validate_rc: null, validate_repairs: 0, validate_note: '', regression_rc: null, placeholders: [], cards: [], evidence_plan: null, quote_check: null, quote_check3: null, plan_check: null, spec: null, spec_check: null }
+  const st = { id, state: 'running', steps: 0, seats: [], fallbacks: [], audit_merge: null, note: '', validate_rc: null, validate_repairs: 0, validate_note: '', regression_rc: null, placeholders: [], cards: [], evidence_plan: null, quote_check: null, quote_check3: null, plan_check: null }
   const lbl = (s) => id + ': ' + s
   const turn = RUN_IDS.indexOf(id)
   let phase1Marked = id !== 'r1'
@@ -5814,7 +5409,11 @@ async function driveRun(id) {
       if (!/PACKET \d+/.test(pk.out)) log(id + ' 3.2: packet build printed no marker — second auditor runs on whatever was written: ' + pk.out.slice(-200))
       const dyn2 = { rd, run: id, repo: BRIEF.repo, step: em.step + ' (second auditor)', inputs: [packet + '  (the ONE file to read: candidate, Phase 2.1 selection, executed blocking findings, top collision hits)'].concat(brainContext(ks, id)), output: out2, seat_index: st.seats.length + 1,
         notes: 'SECOND AUDITOR (Brain addition): you are the second, independent auditor of this candidate — the same five checks and the same output JSON as the system prompt, written to ' + out2 + ' and nowhere else; the first auditor\'s verdict is not shown to you and the workflow merges the two afterwards. Your world is the packet file: every input path the system prompt names resolves to a section of it; anything not in it is unavailable by design. ' + (dyn.notes || '').replace(/Run the RUN command first[^.]*\.\s*/, '') }
-      const [r1, r2] = await parallel([() => seat(k, dyn, lbl(em.step), 'Runs'), () => seat(ks, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, undefined, { retry: false })])
+      // K3 keeps its full contract (CCF/ARFT refs, sub-pattern cards) but its corpus reads are bounded too: lit_table.md → the slice of the collision-hit rows, no lit_results / full texts, plus the packet
+      const slice = rd + '/phase3_critique/lit_table_slice.md'
+      const dyn1 = Object.assign({}, dyn, { inputs: dyn.inputs.filter((l) => !(/^\//.test(l) && /phase0\/(lit_table|lit_results|fulltext)/.test(l))).concat([slice + '  (SLICE of phase0/lit_table.md: the rows of every collision-hit paper — this replaces lit_table.md)', packet + '  (compact packet: candidate, 2.1 selection, executed blocking findings, top collision hits with abstracts)']),
+        notes: (dyn.notes || '') + ' READ BUDGET (Brain addition): your inputs are exactly the files listed under INPUT — the lit_table slice and the packet replace phase0/lit_table.md, lit_results.json and every full text; never open a file that is not listed, never Read the same file twice.' })
+      const [r1, r2] = await parallel([() => seat(k, dyn1, lbl(em.step), 'Runs'), () => seat(ks, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, undefined, { retry: false })])
       r = r1
       st.seats.push({ kind: 'audit_second', step: em.step, ok: !!(r2 && r2.ok), signal: (r2 && r2.signal) || '', model: (r2 && r2.model) || SEATS[ks].model })
       if (r && r.ok && r2 && r2.ok) {
@@ -6010,36 +5609,6 @@ async function driveRun(id) {
       extra = ' PLAN_CHECK FINDINGS (deterministic; PATCH the existing file: fix exactly these items, keep everything else byte-identical, do not re-read inputs you already used): ' + verdict[2].slice(0, 1200)
       log(id + ' plan_check: ' + verdict[2].slice(0, 200))
     }
-    if (st.evidence_plan) {
-      const specDir = rd + '/spec'
-      // a deterministic repository map replaces the seat's own Glob/Grep crawl (the ccf run spent 94 tool calls and 53 min locating files)
-      await sh('cd ' + shq(BRIEF.repo || '.') + ' && { git ls-files 2>/dev/null || find . -type f -not -path "*/.git/*"; } | grep -E "\\.(py|sh|yaml|yml|json|toml|cfg|ini|md|txt)$" | grep -v -E "(^|/)(node_modules|__pycache__|\\.venv|venv|build|dist)/" | head -4000 > ' + shq(specDir + '/repo_map.txt') + '; wc -l < ' + shq(specDir + '/repo_map.txt'), lbl('repo map'), { phase: 'Evidence', timeout: 120000 })
-      const specInputs = [out + '  (the evidence plan — one spec per block)', rd + '/phase4/method_view.json  (equations and steps)',
-                          specDir + '/repo_map.txt  (REPOSITORY MAP: every source file, one repo-relative path per line — locate files here instead of Glob/Grep; Read only the files you name in changes[] and run_cmd)',
-                          rd + '/phase4/phase4_implementability.json  (per-step engineering notes, if present)',
-                          SHARED + '/substrate.md  (file:line facts; every path is repo-relative under REPOSITORY)', SHARED + '/intake.json'].concat(brainContext('spec', id))
-      const specCheck = () => sh(PY + ' - ' + shq(specDir) + ' ' + shq(BRIEF.repo) + ' ' + shq(JSON.stringify(FORBIDDEN_PATTERNS)) + ' ' + shq(rd + '/phase4/phase4_implementability.json') + ' <<\'PYEOF\'\n' + SPEC_CHECK_PY + '\nPYEOF', lbl('spec_check'), { phase: 'Evidence', timeout: 60000 })
-      let extra2 = ''
-      const pre2 = await specCheck(), sv = (/__SPEC_(OK|BAD) ?([^\n]*)/.exec(pre2.out) || [])
-      if (sv[1] === 'OK') { st.spec = specDir; st.spec_check = 'OK (existing specs kept)' + (sv[2] ? ': ' + sv[2].slice(0, 400) : ''); log(id + ' Phase 6: existing spec/ passes spec_check — seat skipped') }
-      else if (sv[1] === 'BAD' && !/no spec\/B\*\.json|index\.json missing/.test(sv[2] || '')) extra2 = ' SPEC_CHECK FINDINGS on the existing files (deterministic; PATCH: open only the spec files named, fix exactly those items, keep every other file byte-identical): ' + (sv[2] || '').slice(0, 1200)
-      for (let attempt = 0; attempt < 2 && !(attempt === 0 && st.spec); attempt++) {
-        const r = await seat('spec', {
-          rd, run: id, repo: BRIEF.repo, step: 'Phase 6 — block specs' + (attempt ? ' (repair)' : ''), inputs: specInputs,
-          output: specDir + '/index.json then ' + specDir + '/B<k>.json (one per block)',
-          notes: 'Read the repository to name real files, functions and launchers; write only under RUN_DIR/spec/.' + extra2,
-        }, lbl('Phase 6 block specs' + (attempt ? ' repair' : '')), 'Evidence')
-        rec('spec', 'Phase 6', r)
-        if (!r || !r.ok) { st.note = 'spec seat failed: ' + ((r && r.note) || 'no result'); break }
-        st.spec = specDir
-        const c = await specCheck()
-        const verdict = (/__SPEC_(OK|BAD) ?([^\n]*)/.exec(c.out) || [])
-        st.spec_check = verdict[1] ? verdict[1] + (verdict[2] ? ': ' + verdict[2].slice(0, 400) : '') : 'unknown: ' + c.out.slice(-200)
-        if (verdict[1] !== 'BAD') break
-        extra2 = ' SPEC_CHECK FINDINGS (deterministic; PATCH: open only the spec files named in the findings, fix exactly those items, keep every other spec file byte-identical, and do not re-read the repository beyond the files the findings name): ' + verdict[2].slice(0, 1200)
-        log(id + ' spec_check: ' + verdict[2].slice(0, 200))
-      }
-    }
   }
   return st
 }
@@ -6057,7 +5626,7 @@ const finished = runs.filter((r) => r.state === 'done' && r.evidence_plan)
 if (finished.length >= 2) {
   phase('Rank')
   const out = ROOT + '/ranking.json'
-  const rankInputs = finished.flatMap((x) => [ROOT + '/' + x.id + '/phase4/idea.detail.en.md', x.evidence_plan, ROOT + '/' + x.id + '/phase3_critique/phase3_critique_output.json  (3.2 audit: paper-pointed threat, verdict)'].concat(x.spec ? [x.spec + '/index.json  (block specs; B1 first)'] : [])).concat([SHARED + '/substrate.md  (compute envelope, baselines)'], brainContext('rank'))
+  const rankInputs = finished.flatMap((x) => [ROOT + '/' + x.id + '/phase4/idea.detail.en.md', x.evidence_plan, ROOT + '/' + x.id + '/phase3_critique/phase3_critique_output.json  (3.2 audit: paper-pointed threat, verdict)']).concat([SHARED + '/substrate.md  (compute envelope, baselines)'], brainContext('rank'))
   const rankCheck_ = () => sh(PY + ' - ' + shq(out) + ' ' + shq(JSON.stringify(finished.map((x) => x.id))) + ' <<\'PYEOF\'\n' + RANK_CHECK_PY + '\nPYEOF', 'rank_check', { phase: 'Rank', timeout: 60000 })
   let extra = ''
   const pre = await rankCheck_(), rv = (/__RANK_(OK|BAD) ?([^\n]*)/.exec(pre.out) || [])
@@ -6079,11 +5648,11 @@ if (finished.length >= 2) {
   }
 }
 
-await sh(PY + ' - ' + shq(ROOT + '/brain.done.json') + ' ' + shq(JSON.stringify({ runs: runs.map((r) => ({ id: r.id, state: r.state, evidence_plan: !!r.evidence_plan, spec: !!r.spec })), ranking: !!ranking })) + ' <<\'PYEOF\'\nimport json, sys, datetime\nd = json.loads(sys.argv[2]); d["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")\njson.dump(d, open(sys.argv[1], "w"), indent=1)\nprint("DONE_MARKER")\nPYEOF', 'brain.done marker', { phase: 'Rank', timeout: 30000 })   // next.py treats this file as the only proof the Brain finished (spec/index.json appears before the last repair)
+await sh(PY + ' - ' + shq(ROOT + '/brain.done.json') + ' ' + shq(JSON.stringify({ runs: runs.map((r) => ({ id: r.id, state: r.state, evidence_plan: !!r.evidence_plan })), ranking: !!ranking })) + ' <<\'PYEOF\'\nimport json, sys, datetime\nd = json.loads(sys.argv[2]); d["finished_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")\njson.dump(d, open(sys.argv[1], "w"), indent=1)\nprint("DONE_MARKER")\nPYEOF', 'brain.done marker', { phase: 'Rank', timeout: 30000 })   // next.py treats this file as the only proof the Brain finished (spec/index.json appears before the last repair)
 
 return {
   root: ROOT, k: K, direction: DIRECTION,
-  runs: runs.map((r) => ({ id: r.id, state: r.state, steps: r.steps, seats: r.seats.length, fallbacks: r.fallbacks, audit_merge: r.audit_merge, cards: r.cards, evidence_plan: r.evidence_plan, plan_check: r.plan_check, spec: r.spec, spec_check: r.spec_check,
+  runs: runs.map((r) => ({ id: r.id, state: r.state, steps: r.steps, seats: r.seats.length, fallbacks: r.fallbacks, audit_merge: r.audit_merge, cards: r.cards, evidence_plan: r.evidence_plan, plan_check: r.plan_check,
     quote_check: r.quote_check, quote_check3: r.quote_check3, validate_rc: r.validate_rc, validate_repairs: r.validate_repairs, validate_note: r.validate_note, regression_rc: r.regression_rc, placeholders: r.placeholders, note: r.note })),
   ranking, rank_check: rankCheck,
 }

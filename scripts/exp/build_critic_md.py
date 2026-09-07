@@ -42,8 +42,8 @@ def q(title, src, body):
 
 
 aris = R / "aris"; refs = HERE / "refs"; paper = R / "papers" / "arft-2608.14905v2.txt"; guide = R / "papers" / "arft_guide.md"
-brain_src = (WS / ".research" / "tools" / "brain_src" / "brain.logic.js").read_text(encoding="utf-8")
-spec_sentence = re.search(r"The plan IS the experiment:[^\n]*?decision_points with a default value\.", brain_src).group(0)
+contract_src = (HERE / "refs" / "spec_contract.md").read_text(encoding="utf-8")   # the former Brain Phase 6 prompt, verbatim, now the Worker's drafting contract
+spec_sentence = re.search(r"The plan IS the experiment:[^\n]*?decision_points with a default value\.", contract_src).group(0)
 
 parts = ["# critic.md — the external reviewer's contract (three modes; paths only, never a summary)",
          "You are the cross-family reviewer of one experiment block. The executor (GLM) collected the paths listed at the end; read every one yourself. Nothing you receive is a summary, and you never grade a summary. Every finding needs an anchor that exists (file:line, log:<path>:<line>, or number:<literal in results/>); a finding without one is dropped by a script.",
@@ -56,7 +56,7 @@ parts = ["# critic.md — the external reviewer's contract (three modes; paths o
          q("ARFT judge guide — Rule 1 Polarity and Rule 2 Credit Due", "docs/refs/papers/arft_guide.md", slice_between(guide, r"^### Rule 1", r"^### Rule 3")),
          "",
          "## MODE: spec — before any code is written (is every scientific decision made?)",
-         q("Brain's own contract for spec/B<k>.json", ".research/tools/brain_src/brain.logic.js (BANK.spec)", spec_sentence),
+         q("The block-spec contract (former Brain Phase 6 prompt; the Worker drafts under it since 2026-09-07)", ".research/tools/exp/refs/spec_contract.md", spec_sentence),
          q("ASI-Bench — the difficulty ladder (B1 is the bar)", "docs/refs/papers/asi-bench/guide/authoring-a-task.md", slice_between(R / "papers/asi-bench/guide/authoring-a-task.md", r"^### The difficulty ladder", r"^## 3\.")),
          q("V8 PREREG (dual reading)", ".research/tools/exp/refs/prereg.md", strip_front(refs / "prereg.md")),
          q("ARFT codes that name a spec defect", "docs/refs/papers/arft_guide.md §5", rows(guide, ["A.2", "A.4", "A.5", "A.6"])),

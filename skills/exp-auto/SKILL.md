@@ -21,7 +21,7 @@ description: "Auto mode — the main window drives the whole pipeline (Brain wor
 2. 按 `phase`：
    - `BRAIN` 且有 `skill` → 按 `run` 的三行做：`brain_lock.py <root> acquire`（exit 3 = 已在跑：不发射，当作 WAIT）→ `Workflow({scriptPath: ".claude/workflows/brain.workflow.js", args: <读 <d.root>/args.json>})`（用输出里的 `root`，重触发后它不是你传入的那个）→ 无论返回什么都 `brain_lock.py <root> release`；回到 1。
    - `BRAIN` 且只有 `run` → 执行 `retrigger.py`（建新根 + 写 negative_anchors），回到 1。
-   - `EXPERIMENT` 且有 `skill` → 用 Skill 工具调 `/<skill> <skill_args>`；做完回到 1。
+   - `EXPERIMENT` 且有 `skill` → 用 Skill 工具调 `/<skill> <skill_args>`；做完回到 1。（`exp-spec` = 该块还没有 spec：Worker 按 Brain 的合同起草一块，spec_check 过了才回到 1）
    - `EXPERIMENT` 且只有 `run` → 逐条执行命令（失败即停，报告输出）；回到 1。
    - `wait_s > 0` → `/loop 10m /exp-auto <run_root>`（或 Monitor），醒来回到 1。
    - `blocked` → 停，把 `state` 与 `note` 报给 owner。

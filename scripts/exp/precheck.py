@@ -16,16 +16,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import WS, BUILD, EXPERIMENTS, jload, jsave, spec_sha, next_xid, save_x, canary_env_from_readme, now
 
-BRAIN_WF = WS / ".claude" / "workflows" / "brain.workflow.js"
+HERE = Path(__file__).resolve().parent
+BRAIN_WF = WS / ".claude" / "workflows" / "brain.workflow.js"   # unused since 2026-09-07 (spec_check.py is the gate); kept for the provenance note
 
 
-def brain_spec_check(spec_dir: Path, repo: str, forbidden: list, impl: Path) -> str:
-    src = BRAIN_WF.read_text(encoding="utf-8")
-    m = re.search(r"^const SPEC_CHECK_PY = `([\s\S]*?)`$", src, re.M)
-    if not m:
-        return "__SPEC_BAD spec_check source not found in brain.workflow.js"
-    py = m.group(1).replace("\\${", "${").replace("\\`", "`").replace("\\\\", "\\")
-    r = subprocess.run([sys.executable, "-", str(spec_dir), repo, json.dumps(forbidden), str(impl)], input=py, capture_output=True, text=True, timeout=120)
+def brain_spec_check(spec_dir: Path, repo: str, forbidden: list, impl: Path, block: str = "", plan: Path | None = None) -> str:
+    """spec_check.py (the former Brain Phase 6 gate, now a script) on one block, with PLAN ⊆ SPEC binding when the plan is given."""
+    cmd = [sys.executable, str(HERE / "spec_check.py"), str(spec_dir), repo, json.dumps(forbidden), str(impl)]
+    if block: cmd += ["--block", block]
+    if plan: cmd += ["--plan", str(plan)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     return (r.stdout + r.stderr).strip()
 
 
@@ -41,9 +41,9 @@ def main() -> int:
     rd = root / run
     plan = jload(rd / "phase5" / "evidence_plan.json")
     index = jload(rd / "spec" / "index.json", {}) or {}
-    if not plan or not index:
-        print(f"BAD: {rd} has no phase5/evidence_plan.json or spec/index.json"); return 1
-    order = index.get("run_order") or plan.get("run_order") or []
+    if not plan:
+        print(f"BAD: {rd} has no phase5/evidence_plan.json"); return 1
+    order = plan.get("run_order") or index.get("run_order") or []
     done = {X.get("block_id") for X in (jload(p, {}) or {} for p in EXPERIMENTS.glob("X-*.json"))
             if X.get("run_root") == str(root) and X.get("run") == run and X.get("status") == "survived"}
     block = a.block or next((b for b in order if b not in done), "")
@@ -52,12 +52,12 @@ def main() -> int:
     spec_path = rd / "spec" / f"{block}.json"
     spec = jload(spec_path)
     if not spec:
-        print(f"BAD: {spec_path} missing or unreadable"); return 1
+        print(f"BAD: {spec_path} missing or unreadable — draft it first: /exp-spec {root} --run {run} --block {block}"); return 1
     if spec.get("blocked"):
         print(f"BLOCKED by Brain: {block}: {spec['blocked']} — route to Brain, write no code"); return 3
     bad, warn = [], []
     repo = a.repo or spec.get("_repo") or ""
-    chk = brain_spec_check(rd / "spec", repo, json.loads(a.forbidden), rd / "phase4" / "phase4_implementability.json")
+    chk = brain_spec_check(rd / "spec", repo, json.loads(a.forbidden), rd / "phase4" / "phase4_implementability.json", block, rd / "phase5" / "evidence_plan.json")
     if chk.startswith("__SPEC_BAD"): bad.append("spec_check: " + chk[len("__SPEC_BAD "):][:600])
     elif "warn:" in chk: warn.append(chk[chk.index("warn:"):][:300])
     cand = (spec.get("verdict_rule") or {}).get("arms", {}).get("candidate")
