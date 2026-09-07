@@ -78,7 +78,7 @@ RS 的核心原则保留：机制必须从文本可算；判改分席；便宜�
 - 同一领域共享 Phase 0（`phase0/` 目录 + 全文缓存）；0c 打标分片。
 - 2.1 处按 `deferred_gaps` 分叉 K 个 run 目录，各自独立走 2.2→5；跨 run 去重由 RS 自带。
 - 2.3 ∥ 3.1；1v 与 2.1+2.2 并行；3.2b 条件串行。
-- 估计：冷启动 Phase 0 3–10 分钟；K=3 warm 约 35–40 分钟出 3 张卡；每 idea GLM ≈20 次、Opus 4、K3 1–2、Astra 1。
+- 估计（2026-09-06 原文，已被实测推翻）：冷启动 Phase 0 3–10 分钟；K=3 warm 约 35–40 分钟出 3 张卡。**实测（2026-09-07，§9i）：干净一腿 k=1 ≈ 170 分钟（Opus 席 @ max effort），含一次 RS abandon→retry 周期 ≈ 305 分钟；Phase 0 冷启动 ≈ 15 分钟。**
 
 ## 7. 砍掉的东西
 
@@ -372,3 +372,15 @@ Workflow({scriptPath: '.claude/workflows/brain.workflow.js',
 | Grok 1.0.13 `--output-format json` 的 text 里是 5 份拼接的 JSON（前 4 份 findings 空，最后一份完整） | critic 两连败 → BLOCKED | `parse_findings` 拆分拼接文档，取最后一份有 findings 的；用那份原始输出做金标测试 |
 
 未变的：K3 审计 10–12 min、GLM 4.1.5 21 min（9.3 万 token 输出，无思考）属于模型侧成本。
+
+## 9j. 第二审稿人精简视图 + Phase 6 三刀（2026-09-07 深夜；32 项测试全绿）
+
+**Sol 第二审稿人**（`SEATS.audit_second`，与 K3 并行，不加跳）：
+- 唯一输入 = 确定性脚本 `SECOND_PACKET_PY` 生成的 `phase3_critique/second_auditor_packet.md`：候选（2.3 精炼版优先，≤60 KB）、2.1 选择（gaps + composition）、2.3 执行过的 blocking findings、碰撞命中按 relevance_score 取 top-20（摘要截 600 字）。不给 lit_table / lit_results / 全文。
+- 静态块只留 RS critique.txt + anti-patterns（砍掉 strict_review / blueprint / ARFT 三份，54 KB → 约 25 KB）；上下文行保留 SCOPE CHECK / THREAT QUOTE（引句只能来自包里的碰撞摘要）/ NEGATIVE ANCHORS / FROZEN。
+- 工具只剩 Read（那一个包）+ Write（那一个输出）；不重试（失败即 K3 单独裁决）。
+- 融合旋钮不变：K3 裁决，Sol 可迫使 revise 并追加 targets，`args.second_auditor_kills` 才能杀。
+
+**Phase 6 三刀**（结构不动）：substrate 是事实源、REPOSITORY MAP 定位、Read 只用来确认将要点名的函数/行，禁止 Glob/Grep 探索；修复 = 只改点名项（PATCH）；effort medium。第四刀（只写 B1 + index，后续块按需补写）留待 Brain 重入机制设计后再做。
+
+**位置戳**：每个席位提示词带 `SEAT #n of this run`——`resumeFromRunId` 的缓存按 prompt 回放，RS 重试周期复用同一批路径，没有它会回放已归档的裁决（ccf 19:05 那次）。

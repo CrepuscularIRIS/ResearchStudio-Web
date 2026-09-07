@@ -12,7 +12,7 @@ description: "Auto mode — the main window drives the whole pipeline (Brain wor
 4. BLOCKED = 需要 owner（Brain 重触发超过 `args.max_brain_rounds`（默认 2）、审者失联两次、无规则状态）：报告并停，不绕过（acceptance-gate：DRIVE 不 ACQUIT）。
 4b. 失败卡之后的梯子由导航器走，不用问：ranking 的 `backup_run`（0 额度）→ 两边都死 → `retrigger.py`（新根 `<root>-n<round>`，复用 `_shared/`，`args.negative_anchors` = 本根全部失败卡）→ 超帽 BLOCKED。重触发的根带 `retrigger.json`，`/exp-auto <原根>` 自动顺着走到新根（输出里的 ROOT 行）。
 5. 同一 emit 连续三次相同 = 卡死：停，报告 `experiments/<X>.json` 与 `route.json`。
-6. Brain 阶段只在 claude-kimi 会话里发射 `Workflow`（官方 API 下 GLM/K3 id 会被静默替换）。
+6. Brain 阶段只在 claude-kimi 会话里发射 `Workflow`（官方 API 下 GLM/K3 id 会被静默替换）。**永远不用 `resumeFromRunId`**：它按 (prompt, opts) 回放缓存，而 RS 的重试周期复用同一批文件路径——ccf 那次 19:05 的 resume 回放了已归档的 3.2 裁决，白白多跑一轮。中断后就重新 `/exp-auto`，磁盘产物就是 resume。
 7. Brain 在后台跑时不要问导航器要实验步：导航器看到新鲜的 `brain.lock` 且没有 `brain.done.json` 就只会给 WAIT（Brain 写完 spec/index.json 之后还有修复轮）。
 8. 已经发射过的不重做：Brain 按盘上产物续跑（完成的阶段永不重跑），同一根上在跑的 Brain 由 `brain.lock` + 45 分钟心跳挡住第二次发射（导航器给 WAIT）；已在跑的 systemd 单元由 `launch.sh` 记回台账而不重发；已过的块、已领的 X、已 gate_passed 的实现都按台账跳过。
 

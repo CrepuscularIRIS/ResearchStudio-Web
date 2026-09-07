@@ -51,6 +51,7 @@ const DENY = {
   repo:      ['Bash', 'Edit', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],
   spec:      ['Bash', 'Edit', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],
   runner:    ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],
+  packet:    ['Bash', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],   // the second auditor: Read (one packet) + Write (one output), nothing else
 }
 const CLAMP = A.no_clamp ? {} : { exec: ['Bash(python3:*)'] }   // args.no_clamp for a host whose Bash is aliased
 const RS = PY + ' ' + shq(SKILL_DIR + '/scripts/run.py')
@@ -4987,7 +4988,7 @@ Write ranking.json to the output path (numbers, never prose, in the numeric fiel
 
 Rules: every run appears exactly once with ranks 1..K; the ten dimension keys and their weights are exactly rubric.md's (12/14/12/14/8/8/10/8/6/8 — a script recomputes weighted_score from your scores and rejects a mismatch, a missing deduction block for a score <= 3, and a recommendation that ignores a fatal gate); rank order follows the tournament rule (serious-risk-adjusted, strongest fixable path), ties broken toward the cheaper first block; every idea carries the five panel notes and a synthesis (a script rejects fewer than five); do not rewrite, merge, or kill ideas — ranking is advisory for the Worker session.` }
 
-BANK.spec = { path: 'brain/spec.md', text: `You are the Phase 6 seat of the V9 Brain: the block-spec author. The idea has passed ResearchStudio's gauntlet and Phase 5 wrote evidence_plan.json (claims, blocks, arms, keep rules). Your job is the ASI-Bench "B1" level of that plan: for EVERY block in evidence_plan.json write spec/B<k>.json — a specification a coding agent can implement WITHOUT making any scientific decision itself. The plan IS the experiment: steps are file-level and executable as written; run_cmd and smoke_cmd are copy-paste runnable; the implementer may make ENGINEERING decisions only — any SCIENTIFIC decision the spec leaves open is a defect of the spec, so if a decision must be delegated, list it in decision_points with a default value. You read the repository (Read/Glob/Grep only; never run anything, never edit repository files) to name real files, functions, configs, tensor shapes and entry points. You write only under RUN_DIR/spec/.
+BANK.spec = { path: 'brain/spec.md', text: `You are the Phase 6 seat of the V9 Brain: the block-spec author. The idea has passed ResearchStudio's gauntlet and Phase 5 wrote evidence_plan.json (claims, blocks, arms, keep rules). Your job is the ASI-Bench "B1" level of that plan: for EVERY block in evidence_plan.json write spec/B<k>.json — a specification a coding agent can implement WITHOUT making any scientific decision itself. The plan IS the experiment: steps are file-level and executable as written; run_cmd and smoke_cmd are copy-paste runnable; the implementer may make ENGINEERING decisions only — any SCIENTIFIC decision the spec leaves open is a defect of the spec, so if a decision must be delegated, list it in decision_points with a default value. substrate.md is your fact source (it already holds the file:line facts Phase -1 extracted) and the REPOSITORY MAP input lists every source file: use them to NAME files, and use Read only to CONFIRM a function, line or config you are about to name — never to explore, never Glob/Grep to discover what the repository contains. You never run anything and never edit repository files. You write only under RUN_DIR/spec/.
 
 Each spec/B<k>.json:
 {
@@ -5254,6 +5255,39 @@ if final != v1: k3["verdict_rationale"] = str(k3.get("verdict_rationale") or "")
 json.dump(k3, open(a, "w"), indent=2, ensure_ascii=False)
 print("AUDIT_MERGE k3=%s second=%s final=%s added_targets=%d" % (v1, v2, final, added))
 `
+// The second auditor's ONLY input: a deterministic compact view (candidate, 2.1 selection, executed blocking findings, top collision hits).
+// A 128k-class model died 7× on "Prompt is too long" when it Read the Phase 0 corpus itself (ccf run 2026-09-07); it now reads one file and nothing else.
+const SECOND_PACKET_PY = `import json, sys
+rd, out = sys.argv[1], sys.argv[2]
+def load(p):
+    try: return json.load(open(p))
+    except Exception: return None
+def cap(s, n):
+    s = str(s); return s if len(s) <= n else s[:n] + "\\n...[truncated %d chars]" % (len(s) - n)
+cand = load(rd + "/phase2_coherence/refined_candidate.json") or load(rd + "/phase2_generate/phase2_generate_output.json")
+sel = load(rd + "/phase2_select/phase2_select_output.json") or {}
+blk = load(rd + "/phase2_coherence/blocking_findings.json")
+hits = load(rd + "/phase3_collision/collision_hits.json")
+parts = ["# Second-auditor packet (deterministic compact view; the ONLY input file of this seat)", ""]
+parts += ["## Candidate (Phase 2.2 output; the 2.3-refined version when refined_candidate.json exists)", "\\x60\\x60\\x60json", cap(json.dumps(cand, indent=1, ensure_ascii=False), 60000), "\\x60\\x60\\x60", ""]
+sel_view = {k: sel.get(k) for k in ("selected_gaps", "composition_note", "coherence_thread_type", "pattern_saturation") if k in sel}
+parts += ["## Phase 2.1 selection (gaps + composition)", "\\x60\\x60\\x60json", cap(json.dumps(sel_view, indent=1, ensure_ascii=False), 15000), "\\x60\\x60\\x60", ""]
+parts += ["## 2.3 blocking findings (executed evidence; null when the gate passed)", "\\x60\\x60\\x60json", cap(json.dumps(blk, indent=1, ensure_ascii=False) if blk else "null", 20000), "\\x60\\x60\\x60", ""]
+if isinstance(hits, dict): hits = hits.get("hits") or hits.get("results") or hits.get("papers") or []
+rows = []
+def score(h):
+    for k in ("relevance_score", "score", "similarity", "sim"):
+        v = h.get(k)
+        try: return float(v)
+        except Exception: pass
+    return 0
+for h in sorted([h for h in (hits or []) if isinstance(h, dict)], key=score, reverse=True)[:20]:
+    r = {k: h.get(k) for k in ("paper_id", "id", "title", "year", "year_month", "venue", "collision_channel", "channel", "source", "relevance_score", "score") if h.get(k) is not None}
+    r["abstract"] = cap(h.get("abstract") or h.get("snippet") or "", 600); rows.append(r)
+parts += ["## Collision hits (top 20 by score, abstracts cut at 600 chars — the threat quote comes from here or is null)", "\\x60\\x60\\x60json", cap(json.dumps(rows, indent=1, ensure_ascii=False), 30000), "\\x60\\x60\\x60", ""]
+txt = "\\n".join(parts); open(out, "w", encoding="utf-8").write(txt)
+print("PACKET", len(txt), "chars", len(rows), "hits")
+`
 const RANK_CHECK_PY = `import json, sys
 p, runs = sys.argv[1], json.loads(sys.argv[2])
 W = {"problem_importance": 12, "novelty": 14, "conceptual_innovation": 12, "method_soundness": 14, "elegance": 8, "feasibility": 8, "experimental_convincibility": 10, "venue_fit": 8, "timeliness": 6, "acceptance_potential": 8}
@@ -5444,6 +5478,7 @@ const TOOLS = {
   exec: 'Tools for this seat: Read, Write, Edit, and Bash clamped to python3 — run the standard-library scripts you write under the WORKDIR named in the RUN section as `python3 /absolute/path/script.py > /absolute/path/script.out 2>&1` (absolute paths, no cd, no pipes, no other programs; the clamp rejects anything else). Paste the script and its printed output into the report exactly as the system prompt asks; never report estimated numbers as measured. Write the report ONCE in full when it is final; do not build it by repeated edits.',
   repo: 'Tools for this seat: Read, Glob, and Grep over the repository named in the RUN section, plus Write for the named outputs only. No Bash, no web.',
   spec: 'Tools for this seat: Read, Glob, and Grep over the repository named in the RUN section (read-only — you never run anything and never edit repository files), plus Write for files under RUN_DIR/spec/ only. No Bash, no web.',
+  packet: 'Tools for this seat: Read for the ONE packet file named in the RUN section and Write for the ONE output file named there. Nothing else exists for this seat: no other file, no Glob, no Grep, no Bash, no web. When the packet lacks something you would have wanted, judge on what it holds and say so in verdict_rationale.',
 }
 const SEAT_FRAME = `You are one isolated seat of the V9 Brain: a ResearchStudio idea-spark step executed as its own sub-agent with a fresh context. Everything you need is in this message and in the files it names; you have no conversation history and need none.
 
@@ -5461,7 +5496,8 @@ const SEATS = {
   generate:  { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['ideate_generate'], refs: ['subpatterns_overview'] },
   cite_fix:  { model: MODEL.opus, effort: 'medium', tools: 'readwrite', prompts: [], refs: ['subpatterns_overview'] },
   coherence: { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'exec', prompts: ['coherence_trace'], refs: [] },   // 2.3 = derivation seat (T1 formalize / T2 executed dry-run / T4 claim grading / T5 naive) — the heaviest seat (20–30 tool calls, ~25 min); Astra's quota died here twice on 2026-09-07 → Opus (fresh context ≠ the 2.2 author context), GLM if Opus fails
-  audit:     { model: MODEL.k3, second: MODEL.sol, effort: 'high', tools: 'readwrite', prompts: ['critique'], refs: ['anti_patterns', 'ccf_strict_review', 'ccf_blueprint', 'arft_guide'] },   // 3.2 kill seat: K3 owns the verdict; Sol (same prompt, own context, in PARALLEL — no extra hop) writes second_opinion.json; AUDIT_MERGE_PY folds it in (owner 2026-09-07: 'K3 + Sol together; if Sol cannot kill, let it review')
+  audit:     { model: MODEL.k3, second: 'audit_second', effort: 'high', tools: 'readwrite', prompts: ['critique'], refs: ['anti_patterns', 'ccf_strict_review', 'ccf_blueprint', 'arft_guide'] },   // 3.2 kill seat: K3 owns the verdict; the second auditor runs in PARALLEL (no extra hop) and AUDIT_MERGE_PY folds its vote in (owner 2026-09-07: 'K3 + Sol together; if Sol cannot kill, let it review')
+  audit_second: { model: MODEL.sol, effort: 'high', tools: 'packet', prompts: ['critique'], refs: ['anti_patterns'] },   // Sol: same RS critique contract, lean static block (no CCF/ARFT refs), ONE input file (the compact packet), ONE output file, no retry
   recheck:   { model: MODEL.k3, effort: 'medium', tools: 'readwrite', prompts: ['refutation_recheck'], refs: [] },
   revise:    { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['revise'], refs: [] },
   reaudit:   { model: MODEL.k3, effort: 'medium', tools: 'readwrite', prompts: ['falsification_reaudit'], refs: [] },
@@ -5474,7 +5510,7 @@ const SEATS = {
   intake:    { model: MODEL.glm, effort: 'medium', tools: 'repo',      prompts: ['intake'], refs: ['intake_routing', 'intent_recognition', 'ccf_idea_intake', 'aris_compute_env', 'aris_evidence_precheck'] },
   evidence:  { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'readwrite', prompts: ['evidence_plan'], refs: ['ccf_evidence_design', 'ccf_result_templates', 'aris_experiment_plan', 'aris_ablation_planner'] },   // Phase 5 evidence contract: Opus, GLM if Opus fails (owner 2026-09-07)
   rank:      { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['rank'], refs: ['ccf_idea_rubric', 'ccf_idea_calibration', 'ccf_strict_review', 'ccf_expert_panel', 'ccf_review_output_standards', 'ccf_venue_adapters', 'ccf_lit_evolution'] },
-  spec:      { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'spec', prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },   // Phase 6 B1 spec against the code (read-only): Opus, GLM if Opus fails (owner 2026-09-07)
+  spec:      { model: MODEL.opus, fallback: MODEL.glm, effort: 'medium', tools: 'spec', prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },   // Phase 6 B1 spec against the code (read-only): Opus, GLM if Opus fails; medium — contract writing, not taste (owner 2026-09-07)
 }
 // args.seat_models = { <seat>: 'opus' | 'glm' | 'k3' | 'sol' | 'astra' } moves a seat to another routed model without regenerating
 // (quota is a per-day fact, not a design fact); the seat's fallback is untouched.
@@ -5540,7 +5576,7 @@ function seatPrompt(kind, dyn) {
   if (dyn.rd) lines.push('RUN_DIR: ' + dyn.rd)
   if (dyn.repo) lines.push('REPOSITORY: ' + dyn.repo)
   if (dyn.workdir) lines.push('WORKDIR (scripts you run live here; create it): ' + dyn.workdir)
-  lines.push('RUN: ' + (dyn.run || '-') + ' | STEP: ' + (dyn.step || kind))
+  lines.push('RUN: ' + (dyn.run || '-') + ' | STEP: ' + (dyn.step || kind) + (dyn.seat_index ? ' | SEAT #' + dyn.seat_index + ' of this run' : ''))   // position stamp: a resumed workflow (resumeFromRunId) caches by prompt text; RS retry cycles reuse the same paths, so identical prompts would replay an archived verdict (ccf run, 19:05)
   lines.push('', 'INPUT (files to Read unless marked inlined; literal lines are context):')
   for (const l of dyn.inputs || []) lines.push('  - ' + annotateInput(kind, l))
   lines.push('', 'OUTPUT: ' + (dyn.output || '-'))
@@ -5589,12 +5625,15 @@ function brainContext(kind, runId) {
     if (NEGATIVE_ANCHORS.length) c.push('NEGATIVE ANCHORS (hard, unlike the soft cross-run dedup): the failure cards at ' + NEGATIVE_ANCHORS.join(', ') + ' record mechanisms that were built and run on this repository and died, with the anchored reason. A candidate whose core mechanism is one of these, or a variant that does not address the card\'s recorded failure reason (its anchors and failure_interpretation), is disqualified before selection; a candidate that turns a card\'s failure_interpretation into its anchor gap is preferred. State in composition_note which cards you checked and why the chosen mechanism is not one of them.')
     if (kind === 'ideate' && K > 1 && turn >= 0) c.push('RUN DIVERSITY (this is run ' + (turn + 1) + ' of ' + K + ', all runs ideate in parallel from the same Phase 1): rank the gaps by promise under the selection rules, then take the gap at rank ' + (turn + 1) + ' as your anchor (run 1 takes the top gap, run 2 the second, and so on); if that gap is disqualified by the selection rules, take the next one down. State the rank you took in composition_note. This replaces the soft cross-run dedup: the K candidates must start from different anchor gaps.')
   }
-  if (kind === 'audit') {
+  if (kind === 'audit' || kind === 'audit_second') {
+    const second = kind === 'audit_second'
     c.push('SCOPE CHECK (Brain addition, judged like a hard floor): besides the five checks, test the candidate against the FROZEN GOAL below — its contribution type, its "out of scope" list, its protocol and its baselines. A candidate that is out of scope (for example a training-free method, a mechanism/audit/benchmark paper, a change to the protocol or metric) is verdict=abandon with the reason recorded under verdict_rationale as "scope_check"; a candidate that drifts partly is a revision_target with scope=tactical naming the drift.')
-    c.push('THREAT QUOTE (Brain addition, checked mechanically afterwards): paper_pointed_threat carries two extra fields — "evidence_quote": one verbatim sentence (at most 40 words) copied exactly from the threat paper\'s abstract as it appears in lit_table.md or in the collision hits, or from its full text under phase0/fulltext/ — the sentence the subsumption argument rests on (for a title-only hit with no abstract, the exact title); and "quote_source": "lit_table" | "collision_hits" | "fulltext". Copy, never paraphrase, never from memory; when no threat is found leave both null.')
-    c.push('REVIEW DISCIPLINE (CCF strict-idea-review and problem-method blueprint, inlined below): the No-Filler Rule applies to verdict_rationale and to every revision_target — each material criticism names the exact claim or mechanism under review, the closest prior art or missing evidence, why a strict reviewer would deduct, the concrete repair or pivot, and what would change the verdict; generic phrases without those anchors are not allowed. Add to the output JSON the field "ccf_coherence_filter" — the six Coherence Filter checks of the blueprint as {"check": "<the check>", "pass": true|false, "evidence": "<one line>"} — and "fatal_idea_risks": the Fatal Idea Risks of the blueprint that apply, each with its anchor (empty list when none). These fields inform verdict_rationale; they do not replace the five RS checks or the two-layer verdict.')
+    c.push(second
+      ? 'THREAT QUOTE (Brain addition): paper_pointed_threat carries two extra fields — "evidence_quote": one verbatim sentence (at most 40 words) copied exactly from a collision-hit abstract in the packet (the sentence the subsumption argument rests on; for a title-only hit, the exact title) and "quote_source": "collision_hits". Copy, never paraphrase, never from memory; when no threat is found leave both null.'
+      : 'THREAT QUOTE (Brain addition, checked mechanically afterwards): paper_pointed_threat carries two extra fields — "evidence_quote": one verbatim sentence (at most 40 words) copied exactly from the threat paper\'s abstract as it appears in lit_table.md or in the collision hits, or from its full text under phase0/fulltext/ — the sentence the subsumption argument rests on (for a title-only hit with no abstract, the exact title); and "quote_source": "lit_table" | "collision_hits" | "fulltext". Copy, never paraphrase, never from memory; when no threat is found leave both null.')
+    if (!second) c.push('REVIEW DISCIPLINE (CCF strict-idea-review and problem-method blueprint, inlined below): the No-Filler Rule applies to verdict_rationale and to every revision_target — each material criticism names the exact claim or mechanism under review, the closest prior art or missing evidence, why a strict reviewer would deduct, the concrete repair or pivot, and what would change the verdict; generic phrases without those anchors are not allowed. Add to the output JSON the field "ccf_coherence_filter" — the six Coherence Filter checks of the blueprint as {"check": "<the check>", "pass": true|false, "evidence": "<one line>"} — and "fatal_idea_risks": the Fatal Idea Risks of the blueprint that apply, each with its anchor (empty list when none). These fields inform verdict_rationale; they do not replace the five RS checks or the two-layer verdict.')
     if (NEGATIVE_ANCHORS.length) c.push('NEGATIVE ANCHORS (Brain addition, judged like a hard floor): the failure cards at ' + NEGATIVE_ANCHORS.join(', ') + ' record mechanisms that were built and run on this repository and died. A candidate that re-proposes a carded mechanism, or a variant that does not address the card\'s recorded failure reason, is verdict=abandon with the reason recorded under verdict_rationale as "negative_anchor:<card>"; a candidate that addresses the recorded reason must say how, and that sentence is a revision_target if it is missing.')
-    c.push('ARFT CODES (the ARFT operational guide is inlined below): give every blocking finding and every revision_target the field "arft_code" — the failure pattern it instantiates when one applies (ideation-stage codes A.1–A.6, cross-stage X.2 goal drift / X.5 teleological reasoning / X.6 right-for-the-wrong-reason; apply the §3 discrimination rules and the §4 Do-NOT-label list; infrastructure is never a code), null when none fits. The codes travel unchanged into the Worker session\'s failure cards, so precision beats coverage.')
+    if (!second) c.push('ARFT CODES (the ARFT operational guide is inlined below): give every blocking finding and every revision_target the field "arft_code" — the failure pattern it instantiates when one applies (ideation-stage codes A.1–A.6, cross-stage X.2 goal drift / X.5 teleological reasoning / X.6 right-for-the-wrong-reason; apply the §3 discrimination rules and the §4 Do-NOT-label list; infrastructure is never a code), null when none fits. The codes travel unchanged into the Worker session\'s failure cards, so precision beats coverage.')
   }
   if (kind === 'revise') {
     c.push('SCOPE (Brain addition): every patch must keep the candidate inside the FROZEN GOAL below — contribution type, protocol, metric, baselines. A revision that would move it out of scope is not applied; say so in the patch entry instead.')
@@ -5610,7 +5649,7 @@ function brainContext(kind, runId) {
     c.push('SUBSTRATE: ' + SHARED + '/substrate.md — feasibility_validation is judged against this compute envelope and these existing baselines, not against the RS factory default.')
     c.push('KEY EQUATIONS DISCIPLINE (ARIS formula-derivation, inlined below): for every key_equations entry the description states the invariant object the equation is written over and the assumptions it uses, and labels the step as identity / proposition / approximation / interpretation; the linked method_flow step\'s why_this_step names the condition under which the equation stops holding (its failure condition). Never hide a gap with "clearly" or "similarly"; an equation whose assumptions cannot be stated is labelled approximation, not proposition. This is the derivation line the Phase 6 spec copies into tests_premise.')
   }
-  if (BRIEF.goal && ['phase1', 'ideate', 'generate', 'audit', 'revise', 'fill', 'evidence', 'spec', 'rank'].includes(kind)) {
+  if (BRIEF.goal && ['phase1', 'ideate', 'generate', 'audit', 'audit_second', 'revise', 'fill', 'evidence', 'spec', 'rank'].includes(kind)) {
     c.push('FROZEN GOAL (verbatim; binding on contribution type, protocol, baselines and keep rule):\n' + BRIEF.goal)
   }
   return c
@@ -5759,7 +5798,7 @@ async function driveRun(id) {
     let notes = em.notes
     if (short.length) notes = notes.replace(/Run the RUN command first \([^)]*\)(, then the sub-agent)?\.\s*/, 'The deterministic RUN command has already been executed by the workflow (its output file is listed under INPUT). ')
     if (job && k !== 'terms') notes = notes.replace(/TWO independent actions: \(1\).*?\(2\) run the 2\.3 sub-agent\.\s*/s, 'The 3.1 collision retrieval has already been launched in the background by the workflow — do only the 2.3 work. ')
-    const dyn = { rd, run: id, repo: BRIEF.repo, step: em.step, inputs: inputs.concat(brainContext(k, id)), output: em.output, notes: notes + (extraNotes ? ' ' + extraNotes : '') }
+    const dyn = { rd, run: id, repo: BRIEF.repo, step: em.step, inputs: inputs.concat(brainContext(k, id)), output: em.output, notes: notes + (extraNotes ? ' ' + extraNotes : ''), seat_index: st.seats.length + 1 }
     if (k === 'coherence') {
       dyn.workdir = rd + '/phase2_coherence'
       await prep('rm -f ' + shq(rd + '/phase2_coherence/blocking_findings.json') + ' ' + shq(rd + '/phase2_coherence/refined_candidate.json'), lbl('prep 2.3 (clear stale side outputs)'), 'Runs')   // a previous, unfinished attempt must not hand 3.2 stale findings
@@ -5770,13 +5809,16 @@ async function driveRun(id) {
       // deterministic merge then folds its vote into K3's file: advance + a second challenge → revise (targets appended); K3's abandon stands.
       const out2 = rd + '/phase3_critique/second_opinion.json'
       // compact inputs for the second auditor: no Phase 0 corpus files (lit_table / lit_results / fulltext) — a 128k-class model died 7× on 'Prompt is too long' reading them (ccf run 2026-09-07); the first auditor owns the literature check
-      const inputs2 = dyn.inputs.filter((l) => !(/^\//.test(l) && /phase0\/(lit_table|lit_results|fulltext)/.test(l)))   // file lines only; context lines (THREAT QUOTE etc.) stay
-      const dyn2 = Object.assign({}, dyn, { inputs: inputs2, output: out2, notes: (dyn.notes || '') + ' SECOND AUDITOR (Brain addition): you are the second, independent auditor of this candidate — same five checks, same output JSON, written to ' + out2 + ' and nowhere else; the first auditor\'s verdict is not shown to you and the workflow merges the two afterwards. COMPACT INPUTS: do not open anything under phase0/ (lit_table.md, lit_results.json, fulltext) and read no file larger than the ones listed — the first auditor covers the literature; judge from the candidate, the Phase 2.1 selection, the collision hits, the blocking findings and the FROZEN goal.' })
-      const [r1, r2] = await parallel([() => seat(k, dyn, lbl(em.step), 'Runs'), () => seat(k, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, SEATS.audit.second, { retry: false })])
+      const ks = SEATS.audit.second, packet = rd + '/phase3_critique/second_auditor_packet.md'
+      const pk = await sh(PY + ' - ' + shq(rd) + ' ' + shq(packet) + ' <<\'PYEOF\'\n' + SECOND_PACKET_PY + '\nPYEOF', lbl('second-auditor packet'), { phase: 'Runs', timeout: 60000 })
+      if (!/PACKET \d+/.test(pk.out)) log(id + ' 3.2: packet build printed no marker — second auditor runs on whatever was written: ' + pk.out.slice(-200))
+      const dyn2 = { rd, run: id, repo: BRIEF.repo, step: em.step + ' (second auditor)', inputs: [packet + '  (the ONE file to read: candidate, Phase 2.1 selection, executed blocking findings, top collision hits)'].concat(brainContext(ks, id)), output: out2, seat_index: st.seats.length + 1,
+        notes: 'SECOND AUDITOR (Brain addition): you are the second, independent auditor of this candidate — the same five checks and the same output JSON as the system prompt, written to ' + out2 + ' and nowhere else; the first auditor\'s verdict is not shown to you and the workflow merges the two afterwards. Your world is the packet file: every input path the system prompt names resolves to a section of it; anything not in it is unavailable by design. ' + (dyn.notes || '').replace(/Run the RUN command first[^.]*\.\s*/, '') }
+      const [r1, r2] = await parallel([() => seat(k, dyn, lbl(em.step), 'Runs'), () => seat(ks, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, undefined, { retry: false })])
       r = r1
-      st.seats.push({ kind: 'audit_second', step: em.step, ok: !!(r2 && r2.ok), signal: (r2 && r2.signal) || '', model: (r2 && r2.model) || SEATS.audit.second })
+      st.seats.push({ kind: 'audit_second', step: em.step, ok: !!(r2 && r2.ok), signal: (r2 && r2.signal) || '', model: (r2 && r2.model) || SEATS[ks].model })
       if (r && r.ok && r2 && r2.ok) {
-        const mg = await sh(PY + ' - ' + shq(em.output) + ' ' + shq(out2) + ' ' + shq(SEATS.audit.second) + ' ' + (SECOND_KILLS ? 1 : 0) + ' <<\'PYEOF\'\n' + AUDIT_MERGE_PY + '\nPYEOF', lbl('audit merge'), { phase: 'Runs', timeout: 60000 })
+        const mg = await sh(PY + ' - ' + shq(em.output) + ' ' + shq(out2) + ' ' + shq(SEATS[ks].model) + ' ' + (SECOND_KILLS ? 1 : 0) + ' <<\'PYEOF\'\n' + AUDIT_MERGE_PY + '\nPYEOF', lbl('audit merge'), { phase: 'Runs', timeout: 60000 })
         const line = /AUDIT_MERGE [^\n]*/.exec(mg.out); st.audit_merge = line ? line[0] : 'merge failed: ' + mg.out.slice(-200)
         log(id + ' 3.2 ' + st.audit_merge)
       } else if (r && r.ok) { st.audit_merge = 'second auditor returned no result — K3 verdict stands alone'; log(id + ' 3.2 ' + st.audit_merge) }

@@ -70,6 +70,7 @@ function navigate(rd) {
 let tagRepaired = false, bashFailed = false
 function runSub(cmd) {
   let m
+  if (/print\("PACKET/.test(cmd)) return 'PACKET 41234 chars 20 hits'
   if (/print\("AUDIT_MERGE/.test(cmd)) return process.env.MOCK_SECOND_KILL ? 'AUDIT_MERGE k3=advance second=abandon final=revise added_targets=2' : 'AUDIT_MERGE k3=advance second=advance final=advance added_targets=0'
   if (/print\("MISSING"/.test(cmd)) { if (process.env.MOCK_TAG_MISSING && !tagRepaired) { tagRepaired = true; return 'MISSING 3 dropped 1' } return 'MISSING 0 dropped 0' }
   if (/print\("__QUOTE/.test(cmd)) return '__QUOTE 3/3 verified'
@@ -241,12 +242,13 @@ if (process.env.MOCK_BASH_FAIL) {
   assert(audK3.length === 3 && rep.length === 2 && rep.every((c) => c.prompt.includes('append_items must be a list')), 'a deterministic step that rejects the audit output sends the seat back once with the rejection (K3 + second auditor): ' + audK3.length + '/' + rep.length)
   assert(sh.filter((c) => /run\.py['"]? phase4_skeleton /.test(c.cmd)).length === 3, 'the rejected step runs again after the repair pass (r1 fail + r1 retry + r2)')
 } else assert(audK3.length === 2 && audSol.length === 2 && audSol.every((c) => c.prompt.includes('SECOND AUDITOR') && c.prompt.includes('second_opinion.json')) && audK3.every((c) => !c.prompt.includes('SECOND AUDITOR')), 'per run: one K3 audit + one Sol second auditor, same prompt family, own output file')
-assert(audSol.every((c) => c.prompt.includes('THREAT QUOTE') && c.prompt.includes('COMPACT INPUTS') && !/^\s+- \/[^\n]*phase0\/lit_table/m.test(c.prompt)) && audK3.every((c) => /phase0\/lit_table/.test(c.prompt)), 'second auditor keeps the context lines but not the Phase 0 corpus files; K3 keeps them')
+assert(audSol.every((c) => c.prompt.includes('second_auditor_packet.md') && c.prompt.includes('THREAT QUOTE') && c.prompt.includes('SCOPE CHECK') && c.prompt.includes('FROZEN GOAL') && !c.prompt.includes('strict-idea-review.md (verbatim; inlined') && !c.prompt.includes('arft_guide.md (verbatim; inlined') && !/^\s+- \/[^\n]*(lit_table|fulltext|lit_results)/m.test(c.prompt) && c.deny.includes('Glob') && c.deny.includes('Bash') && !c.deny.includes('Read') && !c.deny.includes('Write')) && audK3.every((c) => /phase0\/lit_table/.test(c.prompt)), 'second auditor: one packet file, lean static block, Read+Write only; K3 keeps the corpus and the CCF/ARFT refs')
+assert(sh.filter((c) => /print\("PACKET/.test(c.cmd || '')).length === (process.env.MOCK_BASH_FAIL ? 3 : 2), 'one deterministic packet build per audit pass')
 const mergeCalls = calls.filter((c) => /print\("AUDIT_MERGE/.test(c.cmd || ''))
 assert(mergeCalls.length === (process.env.MOCK_BASH_FAIL ? 3 : 2), 'one deterministic audit merge per audit pass (the self-heal repair pass merges again): ' + mergeCalls.length)
 assert(result.runs.every((r) => /^AUDIT_MERGE k3=advance second=(advance|abandon) final=(advance|revise)/.test(r.audit_merge || '')), 'merge line recorded per run: ' + JSON.stringify(result.runs.map((r) => r.audit_merge)))
 if (process.env.MOCK_SECOND_KILL) assert(result.runs.every((r) => /final=revise/.test(r.audit_merge)), 'a second-auditor abandon downgrades advance to revise, never to abandon')
-assert(aud.length === (process.env.MOCK_BASH_FAIL ? 6 : 4) && aud.every((c) => c.prompt.includes('critique.txt (verbatim)') && c.prompt.includes('references/anti-patterns.md (verbatim; inlined') && c.prompt.includes('<each cited C##>.md')), 'audit seats: K3, anti-patterns inlined, card marker passed through')
+assert(aud.length === (process.env.MOCK_BASH_FAIL ? 6 : 4) && audK3.every((c) => c.prompt.includes('critique.txt (verbatim)') && c.prompt.includes('references/anti-patterns.md (verbatim; inlined') && c.prompt.includes('<each cited C##>.md')), 'audit seats: K3, anti-patterns inlined, card marker passed through')
 assert(seats.filter((c) => /Phase 4\.fill/.test(c.label)).every((c) => c.model === 'claude-opus-5' && c.prompt.includes('expand.txt (verbatim)') && c.prompt.includes('formula-derivation/SKILL.md (verbatim; inlined') && c.prompt.includes('KEY EQUATIONS DISCIPLINE')), 'fill on Opus with the ARIS derivation discipline')
 assert(seats.filter((c) => /Phase 4\.derive/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]' && c.effort === 'low'), 'derive on GLM low')
 assert(seats.filter((c) => /Phase 4\.1\.5/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]'), 'implementability on GLM')
@@ -265,7 +267,7 @@ assert(sh.filter((c) => / p1 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length ==
 assert(sh.filter((c) => / p3 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 2, '3.2 threat quote check once per run')
 assert(result.runs.every((r) => r.quote_check3 === '1/1 verified') && result.runs.find((r) => r.id === 'r1').quote_check === '3/3 verified', 'quote results recorded: ' + JSON.stringify(result.runs.map((r) => [r.quote_check, r.quote_check3])))
 assert(sh.filter((c) => /__OUT_OK/.test(c.cmd)).length >= 10, 'seat outputs are verified in the navigator call')
-assert(aud.every((c) => c.prompt.includes('SCOPE CHECK') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('THREAT QUOTE') && c.prompt.includes('REVIEW DISCIPLINE') && c.prompt.includes('strict-idea-review.md (verbatim; inlined') && c.prompt.includes('problem-method-blueprint.md (verbatim; inlined') && c.prompt.includes('ARFT CODES') && c.prompt.includes('arft_guide.md (verbatim; inlined')), 'audit seats get FROZEN + scope check + threat quote + CCF review discipline + ARFT codes')
+assert(audK3.every((c) => c.prompt.includes('SCOPE CHECK') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('THREAT QUOTE') && c.prompt.includes('REVIEW DISCIPLINE') && c.prompt.includes('strict-idea-review.md (verbatim; inlined') && c.prompt.includes('problem-method-blueprint.md (verbatim; inlined') && c.prompt.includes('ARFT CODES') && c.prompt.includes('arft_guide.md (verbatim; inlined')), 'audit seats get FROZEN + scope check + threat quote + CCF review discipline + ARFT codes')
 assert(seats.filter((c) => /Phase 3\.3/.test(c.label)).every((c) => c.prompt.includes('FROZEN GOAL')), 'revise seats get FROZEN')
 assert(p1[0].prompt.includes('evidence_quote') && p1[0].prompt.includes('RELATION') && p1[0].prompt.includes('literature-grounded-evolution.md (verbatim; inlined'), 'Phase 1 asks for evidence quotes + relation edges (CCF relation map inlined)')
 assert(ideR2.prompt.includes('RUN DIVERSITY') && ideR2.prompt.includes('rank 2'), 'r2 ideate takes the second-ranked anchor gap')

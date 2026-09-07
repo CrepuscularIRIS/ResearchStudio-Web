@@ -26,7 +26,7 @@ def test_workflow_parses_and_fits() -> None:
     for token in ("agentType", "brain.py", ".research/brain"):
         assert token not in src  # no custom agent types, no python layer
     seats = src[src.index("const SEATS = {"):src.index("// Route a navigator emit")]
-    assert seats.count("effort: '") == 19  # every seat pins its effort (18 RS/Brain seats + Phase 6 spec); no new seats
+    assert seats.count("effort: '") == 20  # every seat pins its effort (18 RS/Brain seats + Phase 6 spec + the parallel second auditor); no new serial seats
 
 
 def test_generator_roundtrip(tmp_path: Path) -> None:
