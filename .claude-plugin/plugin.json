@@ -1,7 +1,7 @@
 {
   "name": "research-harness",
   "version": "0.4.0",
-  "description": "V9 research harness for Claude Code: one Brain workflow (ResearchStudio idea-spark spine run verbatim, 19 seats: Opus authors, GLM engineers, K3 audits, Sol writes the evidence plan and the B1 spec) turns a repository + FROZEN goal into idea cards, an evidence plan and B1 specs; a main-window skill chain (exp-next \u2192 critic \u2192 build \u2192 critic \u2192 launch \u2192 verdict \u2192 handoff, Grok CLI as the read-only cross-family reviewer) runs the blocks; next.py is the navigator and /exp-auto the loop; failure cards flow back as negative anchors.",
+  "description": "V9 research harness for Claude Code: one Brain workflow (ResearchStudio idea-spark spine run verbatim, 19 seats: Opus authors, GLM engineers, K3 audits with Sol as the parallel second auditor) turns a repository + FROZEN goal into idea cards, an evidence plan and B1 specs; a main-window skill chain (exp-next \u2192 critic \u2192 build \u2192 critic \u2192 launch \u2192 verdict \u2192 handoff, Grok CLI as the read-only cross-family reviewer) runs the blocks; next.py is the navigator and /exp-auto the loop; failure cards flow back as negative anchors.",
   "author": {
     "name": "CrepuscularIRIS"
   },
