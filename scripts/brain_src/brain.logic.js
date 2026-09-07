@@ -36,7 +36,7 @@ const NEGATIVE_ANCHORS = Array.isArray(A.negative_anchors) ? A.negative_anchors.
 // exist and the harness silently serves the SESSION model at session effort instead — that is
 // what turned the 2026-09-06 run into 3.6 h. Override per environment with
 // args.models = {opus, glm, k3} and args.runner_model; effort is set explicitly on every seat.
-const MODEL = Object.assign({ opus: 'claude-opus-5', glm: 'glm-5.3[1m]', k3: 'k3-256k', astra: 'gpt-6-astra' }, A.models || {})   // astra = GPT-6 Astra on LiteLLM :4001 (CLIProxy Codex OAuth, reasoning high); args.models.astra can point at gpt-6-astra-max
+const MODEL = Object.assign({ opus: 'claude-opus-5', glm: 'glm-5.3[1m]', k3: 'k3-256k', sol: 'gpt-5.6-sol', astra: 'gpt-6-astra' }, A.models || {})   // sol / astra = Codex-OAuth models on LiteLLM :4001 (quota-limited: keep them on one-call seats; a model whose quota is gone hangs in API retries and never reaches the seat fallback)
 const RUNNER_MODEL = A.runner_model || MODEL.glm
 const STAGGER = !!A.stagger   // true: 2.1+2.2 one run at a time so RS's CROSS-RUN DEDUP line sees earlier candidates (+~15 min per extra run)
 
@@ -538,7 +538,7 @@ const SEATS = {
   ideate:    { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['ideate_select', 'ideate_generate'], refs: ['patterns_overview', 'companion_combos', 'subpatterns_overview'] },
   generate:  { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['ideate_generate'], refs: ['subpatterns_overview'] },
   cite_fix:  { model: MODEL.opus, effort: 'medium', tools: 'readwrite', prompts: [], refs: ['subpatterns_overview'] },
-  coherence: { model: MODEL.astra, fallback: MODEL.opus, effort: 'high', tools: 'exec', prompts: ['coherence_trace'], refs: [] },   // 2.3 IS the derivation seat (T1 formalize / T2 executed dry-run / T4 claim grading / T5 naive): the math model, cross-family from the Opus author; Opus takes over when Astra fails (owner, 2026-09-07)
+  coherence: { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'exec', prompts: ['coherence_trace'], refs: [] },   // 2.3 = derivation seat (T1 formalize / T2 executed dry-run / T4 claim grading / T5 naive) — the heaviest seat (20–30 tool calls, ~25 min); Astra's quota died here twice on 2026-09-07 → Opus (fresh context ≠ the 2.2 author context), GLM if Opus fails
   audit:     { model: MODEL.k3, effort: 'high', tools: 'readwrite', prompts: ['critique'], refs: ['anti_patterns', 'ccf_strict_review', 'ccf_blueprint', 'arft_guide'] },
   recheck:   { model: MODEL.k3, effort: 'medium', tools: 'readwrite', prompts: ['refutation_recheck'], refs: [] },
   revise:    { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['revise'], refs: [] },
@@ -550,10 +550,13 @@ const SEATS = {
   writeup:   { model: MODEL.glm, effort: 'low', tools: 'readwrite', prompts: [], refs: [] },
   tagging:   { model: MODEL.glm, effort: 'low', tools: 'readwrite', prompts: ['tagging_shard'], refs: ['rubric', 'patterns_overview'] },
   intake:    { model: MODEL.glm, effort: 'medium', tools: 'repo',      prompts: ['intake'], refs: ['intake_routing', 'intent_recognition', 'ccf_idea_intake', 'aris_compute_env', 'aris_evidence_precheck'] },
-  evidence:  { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['evidence_plan'], refs: ['ccf_evidence_design', 'ccf_result_templates', 'aris_experiment_plan', 'aris_ablation_planner'] },
+  evidence:  { model: MODEL.sol, fallback: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['evidence_plan'], refs: ['ccf_evidence_design', 'ccf_result_templates', 'aris_experiment_plan', 'aris_ablation_planner'] },   // Phase 5 = formal experimental design (arms, negative control, keep rule, Lehr MDE): one call per run — Sol (V8's falsifier seat), Opus if Sol fails
   rank:      { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['rank'], refs: ['ccf_idea_rubric', 'ccf_idea_calibration', 'ccf_strict_review', 'ccf_expert_panel', 'ccf_review_output_standards', 'ccf_venue_adapters', 'ccf_lit_evolution'] },
-  spec:      { model: MODEL.opus, effort: 'high',   tools: 'spec',      prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },
+  spec:      { model: MODEL.sol, fallback: MODEL.opus, effort: 'high', tools: 'spec', prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },   // Phase 6 = B1 spec compiled against the code (read-only): one call per run — Sol (V8's spec seat), Opus if Sol fails
 }
+// args.seat_models = { <seat>: 'opus' | 'glm' | 'k3' | 'sol' | 'astra' } moves a seat to another routed model without regenerating
+// (quota is a per-day fact, not a design fact); the seat's fallback is untouched.
+for (const [k, v] of Object.entries(A.seat_models || {})) { if (SEATS[k] && MODEL[v]) SEATS[k].model = MODEL[v]; else throw new Error('args.seat_models: unknown seat or model key ' + k + ':' + v) }
 // Route a navigator emit to a seat kind by the PROMPT file it names (order matters).
 const ROUTES = [
   [/pattern-summary-rubric\.md/, 'tagging'],

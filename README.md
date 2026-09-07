@@ -25,18 +25,19 @@ One self-contained Workflow script (~430 KB, 41 verbatim prompt/reference files 
 | tagging | 0c pattern tagging (parallel shards) | GLM / low | read/write |
 | phase1 | bottleneck + method lineage (+ CCF relation map, evidence quotes checked mechanically) | Opus / high | read/write |
 | ideate / generate | 2.1 + 2.2 gap × pattern → candidate (substrate premise; run diversity for k > 1) | Opus / high | read/write |
-| coherence | 2.3 dry-run trace: T1 formalise · T2 executed numeric dry-run · T3 probes · T4 claim grading · T5 independent naive baseline | **GPT-6 Astra** / high, fallback Opus | python only |
+| coherence | 2.3 dry-run trace: T1 formalise · T2 executed numeric dry-run · T3 probes · T4 claim grading · T5 independent naive baseline (the heaviest seat: 20–30 tool calls) | Opus / high, fallback GLM | python only |
 | audit / recheck / reaudit | 3.2 five checks (+ CCF strict review, ARFT codes, FROZEN scope check, threat quote checked) | K3 / high·medium | read/write |
 | revise | 3.3 patch (named fields only) | Opus / high | read/write |
 | fill / derive / impl | 4b card (ARIS key-equations discipline) · plain register · 4.1.5 implementability | Opus / GLM / GLM | read/write |
-| evidence | Phase 5 evidence plan (CCF evidence design, ARIS experiment plan + ablation planner, Lehr MDE) | Opus / high | read/write |
-| spec | Phase 6 B1 specs in machine form (`verdict_rule.keep_if_all`, arms, negative control, ASI `gates[]`) | Opus / high | read-only repo |
+| evidence | Phase 5 evidence plan (CCF evidence design, ARIS experiment plan + ablation planner, Lehr MDE) | **Sol** (gpt-5.6) / high, fallback Opus | read/write |
+| spec | Phase 6 B1 specs in machine form (`verdict_rule.keep_if_all`, arms, negative control, ASI `gates[]`) | **Sol** (gpt-5.6) / high, fallback Opus | read-only repo |
 | rank | CCF rubric + calibration + expert panel; deterministic recomputation | Opus / high | read/write |
 
 Deterministic checks between seats (quote checks, `plan_check`, `spec_check`, `rank_check`, RS validate + regression_check, placeholder scan)
 each get one repair. Every seat pins a model id **and** an effort; unknown ids are served silently by the session model on the official API, so
-launch the Brain from a session whose ids resolve (a LiteLLM proxy: `claude-opus-5`, `glm-5.3[1m]`, `k3-256k`, `gpt-6-astra`; override with
-`args.models`). `args.negative_anchors` (failure cards) reach Phase 1, ideate and 3.2 only.
+launch the Brain from a session whose ids resolve (a LiteLLM proxy: `claude-opus-5`, `glm-5.3[1m]`, `k3-256k`, `gpt-5.6-sol`; override ids with
+`args.models`, move a seat with `args.seat_models = {spec: 'opus'}`). Quota-limited models belong on one-call seats: a model whose quota is gone hangs in
+API retries and never reaches the seat's fallback (that is how GPT-6 Astra died on the 25-minute 2.3 seat). `args.negative_anchors` (failure cards) reach Phase 1, ideate and 3.2 only.
 
 ## Experiment — seven skills, six scripts (`skills/`, `scripts/exp/`)
 

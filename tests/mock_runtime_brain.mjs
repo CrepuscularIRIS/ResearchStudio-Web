@@ -143,7 +143,7 @@ function runCommand(cmd) {
 }
 
 // ---------------------------------------------------------------- stub agent
-let astraFailed = false
+let seatFailed = false
 const stub = async (prompt, opts) => {
   const i = calls.length
   const rec = { i, label: opts.label, model: opts.model, effort: opts.effort, deny: opts.disallowedTools, clamp: opts.bashCommandClamp, prompt }
@@ -157,7 +157,7 @@ const stub = async (prompt, opts) => {
     return { rc: 0, out: runCommand(cmd) + '\n__SH_RC=0' }
   }
   rec.kind = 'seat'
-  if (process.env.MOCK_ASTRA_FAIL && opts.model === 'gpt-6-astra' && !astraFailed) { astraFailed = true; return null }   // terminal API error: agent() resolves null
+  if (process.env.MOCK_SEAT_FAIL && /Phase 2\.3/.test(opts.label) && !seatFailed) { seatFailed = true; return null }   // terminal API error on the 2.3 primary: agent() resolves null
   if (process.env.DUMP) console.log('#### SEAT ' + opts.label + '\n' + prompt.slice(prompt.indexOf('═══ RUN ═══')))
   const out = /^OUTPUT: (.*)$/m.exec(prompt)[1]
   const outs = out.split(' then ').map((s) => s.trim().split(' ')[0]).filter((s) => s.startsWith('/'))
@@ -171,7 +171,7 @@ const stub = async (prompt, opts) => {
 const par = async (t) => Promise.all(t.map((f) => f()))
 const AF = Object.getPrototypeOf(async function () {}).constructor
 const main = new AF('args', 'agent', 'parallel', 'pipeline', 'phase', 'log', src)
-const result = await main({ root: ROOT, k: 2, repo: '/mock/repo', dataset: 'NYU', venue: 'PR', goal: 'FROZEN mock goal text', anomalies: '/mock/anomalies.md', skill_dir: SK, stagger: true, negative_anchors: process.env.MOCK_NEG_ANCHORS ? ['/mock/failures/X-001.json'] : undefined }, stub, par, par, (t) => console.log('── ' + t), (m) => console.log('  ' + m))
+const result = await main({ root: ROOT, k: 2, repo: '/mock/repo', dataset: 'NYU', venue: 'PR', goal: 'FROZEN mock goal text', anomalies: '/mock/anomalies.md', skill_dir: SK, stagger: true, negative_anchors: process.env.MOCK_NEG_ANCHORS ? ['/mock/failures/X-001.json'] : undefined, seat_models: process.env.MOCK_SEAT_MODELS ? { spec: 'opus' } : undefined }, stub, par, par, (t) => console.log('── ' + t), (m) => console.log('  ' + m))
 
 // ---------------------------------------------------------------- assertions
 const seats = calls.filter((c) => c.kind === 'seat')
@@ -220,15 +220,16 @@ assert(ideR1.prompt.indexOf('═══ RUN ═══') > Math.max(ideR1.prompt.l
 
 const coh = seats.filter((c) => /Phase 2\.3/.test(c.label))
 assert(coh.every((c) => c.prompt.includes('WORKDIR') && c.prompt.includes('coherence_trace.txt (verbatim)') && c.effort === 'high'), 'coherence seats: WORKDIR + verbatim prompt, effort high')
-if (process.env.MOCK_ASTRA_FAIL) {
+if (process.env.MOCK_SEAT_FAIL) {
   const r1c = coh.filter((c) => c.label.startsWith('r1:')), r2c = coh.filter((c) => c.label.startsWith('r2:'))
-  assert(r1c.length === 2 && r1c[0].model === 'gpt-6-astra' && r1c[1].model === 'claude-opus-5' && r2c.length === 1 && r2c[0].model === 'gpt-6-astra', 'Astra down on r1 → the retry runs on the Opus fallback; r2 stays on Astra: ' + coh.map((c) => c.label.slice(0, 14) + '=' + c.model).join(','))
+  assert(r1c.length === 2 && r1c[0].model === 'claude-opus-5' && r1c[1].model === 'glm-5.3[1m]' && r2c.length === 1 && r2c[0].model === 'claude-opus-5', 'Opus down on r1 2.3 → the retry runs on the GLM fallback; r2 stays on Opus: ' + coh.map((c) => c.label.slice(0, 14) + '=' + c.model).join(','))
   const fb = Object.fromEntries(result.runs.map((r) => [r.id, r.fallbacks]))
-  assert(fb.r1.length === 1 && fb.r1[0].kind === 'coherence' && fb.r1[0].from === 'gpt-6-astra' && fb.r1[0].to === 'claude-opus-5' && fb.r2.length === 0, 'the fallback is recorded in the run record: ' + JSON.stringify(fb))
+  assert(fb.r1.length === 1 && fb.r1[0].kind === 'coherence' && fb.r1[0].from === 'claude-opus-5' && fb.r1[0].to === 'glm-5.3[1m]' && fb.r2.length === 0, 'the fallback is recorded in the run record: ' + JSON.stringify(fb))
 } else {
-  assert(coh.length === 2 && coh.every((c) => c.model === 'gpt-6-astra'), 'coherence seats on Astra (gpt-6-astra)')
+  assert(coh.length === 2 && coh.every((c) => c.model === 'claude-opus-5'), 'coherence seats on Opus (fresh context, not the 2.2 author context)')
   assert(result.runs.every((r) => r.fallbacks.length === 0), 'no fallbacks on the happy path')
 }
+const SPEC_MODEL = process.env.MOCK_SEAT_MODELS ? 'claude-opus-5' : 'gpt-5.6-sol'   // args.seat_models = { spec: 'opus' } in that variant
 const cohR1 = coh.find((c) => c.label.startsWith('r1:'))
 assert(idx(/^sh: r1: collision launch/) < cohR1.i && cohR1.i < idx(/^sh: r1: collision wait 1/), 'collision launched before 2.3 and awaited after')
 
@@ -238,9 +239,9 @@ assert(seats.filter((c) => /Phase 4\.fill/.test(c.label)).every((c) => c.model =
 assert(seats.filter((c) => /Phase 4\.derive/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]' && c.effort === 'low'), 'derive on GLM low')
 assert(seats.filter((c) => /Phase 4\.1\.5/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]'), 'implementability on GLM')
 const ev = seats.filter((c) => /Phase 5/.test(c.label))
-assert(ev.length === 2 && ev.every((c) => c.model === 'claude-opus-5' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
+assert(ev.length === 2 && ev.every((c) => c.model === 'gpt-5.6-sol' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
 const sp = seats.filter((c) => /Phase 6/.test(c.label))
-assert(sp.length === 2 && sp.every((c) => c.model === 'claude-opus-5' && c.deny.includes('Bash') && c.deny.includes('Edit') && !c.deny.includes('Glob') && c.prompt.includes('brain/spec.md (verbatim)') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('task.yaml (verbatim; inlined') && c.prompt.includes('prompt_b1.md (verbatim; inlined') && c.prompt.includes('"gates"')), 'Phase 6 spec seats: Opus, read-only repo, FROZEN, ASI gates form')
+assert(sp.length === 2 && sp.every((c) => c.model === SPEC_MODEL && c.deny.includes('Bash') && c.deny.includes('Edit') && !c.deny.includes('Glob') && c.prompt.includes('brain/spec.md (verbatim)') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('task.yaml (verbatim; inlined') && c.prompt.includes('prompt_b1.md (verbatim; inlined') && c.prompt.includes('"gates"')), 'Phase 6 spec seats: Opus, read-only repo, FROZEN, ASI gates form')
 assert(sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 2 && sh.filter((c) => /__SPEC_/.test(c.cmd)).length === 2, 'plan_check and spec_check ran once per run')
 assert(sh.filter((c) => / p1 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 1, 'Phase 1 quote check once (r1)')
 assert(sh.filter((c) => / p3 '/.test(c.cmd) && /__QUOTE3/.test(c.cmd)).length === 2, '3.2 threat quote check once per run')
@@ -276,7 +277,7 @@ if (process.env.MOCK_NEG_ANCHORS) {
   assert(na.length === 5 && na.every((c) => /NEGATIVE ANCHORS \((Brain addition|hard)/.test(c.prompt) && c.prompt.includes('/mock/failures/X-001.json')), 'negative anchors reach Phase 1, both ideate seats and both audit seats: ' + na.map((c) => c.label.slice(0, 24)).join(','))
   assert(seats.filter((c) => /Phase 4|Phase 5|Phase 6|rank/.test(c.label)).every((c) => !c.prompt.includes('/mock/failures/')), 'negative anchors stay out of the card / plan / spec / rank seats')
 } else assert(seats.every((c) => !c.prompt.includes('/mock/failures/') && !/NEGATIVE ANCHORS \((Brain addition|hard)/.test(c.prompt)), 'no negative-anchor line without args.negative_anchors')
-const ALLOWED = new Set(['claude-opus-5', 'glm-5.3[1m]', 'k3-256k', 'gpt-6-astra'])
+const ALLOWED = new Set(['claude-opus-5', 'glm-5.3[1m]', 'k3-256k', 'gpt-5.6-sol', 'gpt-6-astra'])
 assert(calls.every((c) => ALLOWED.has(c.model)), 'every agent call pins one of the routed model ids: ' + [...new Set(calls.map((c) => c.model))].join(','))
 assert(calls.every((c) => ['low', 'medium', 'high'].includes(c.effort)), 'every agent call sets effort explicitly (never inherits the session effort)')
 assert(calls.every((c) => Array.isArray(c.deny) && c.deny.length > 0), 'every agent call narrows its tool pool (disallowedTools)')
