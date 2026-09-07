@@ -67,8 +67,10 @@ function navigate(rd) {
 }
 
 // ---------------------------------------------------------------- scripted shell
+let tagRepaired = false
 function runSub(cmd) {
   let m
+  if (/print\("MISSING"/.test(cmd)) { if (process.env.MOCK_TAG_MISSING && !tagRepaired) { tagRepaired = true; return 'MISSING 3 dropped 1' } return 'MISSING 0 dropped 0' }
   if (/print\("__QUOTE/.test(cmd)) return '__QUOTE 3/3 verified'
   if ((m = /run\.py'? next --dir '([^']+)'/.exec(cmd))) return navigate(m[1])
   if ((m = /lit_table_merge --out '([^']+)'/.exec(cmd))) { add(m[1] + '/lit_table.md'); return 'merged 2 shards' }
@@ -187,6 +189,12 @@ assert(intake && intake.model === 'glm-5.3[1m]' && intake.prompt.includes('brain
 assert(intake.prompt.includes('references/intake-routing.md (verbatim; inlined') && intake.prompt.includes('references/intent-recognition.md (verbatim; inlined') && intake.prompt.includes('compute-env-contract.md (verbatim; inlined') && intake.prompt.includes('idea-intake.md (verbatim; inlined') && intake.prompt.includes('evidence-precheck.md (verbatim; inlined'), 'intake refs inlined (RS + CCF idea-intake + ARIS compute-env / evidence-precheck)')
 assert(idx(/phase0 retrieval launch/) < idx(/phase0 retrieval wait 1/), 'phase0 launched then polled')
 assert(seats.filter((c) => /tagging shard/.test(c.label)).length === 2, 'two tagging shards')
+const tagRep = seats.filter((c) => /tagging repair/.test(c.label)), mergeCmd = (calls.find((c) => /lit_table_merge/.test(c.cmd || '')) || {}).cmd || ''
+if (process.env.MOCK_TAG_MISSING) {
+  assert(tagRep.length === 1 && tagRep[0].model === 'glm-5.3[1m]' && tagRep[0].prompt.includes('lit_slice_repair.json') && tagRep[0].prompt.includes('never skipped'), 'one GLM repair seat over the repair slice')
+  assert(mergeCmd.includes('lit_rows_shard_repair.md') && mergeCmd.includes('lit_rows_shard1.md'), 'merge includes the repair shard: ' + mergeCmd.slice(-160))
+} else assert(tagRep.length === 0 && !mergeCmd.includes('repair'), 'no repair seat when nothing is missing')
+assert(idx(/clean shards/) > idx(/tagging shard 1/) && idx(/lit_table_merge/) > idx(/clean shards/), 'shards → clean → (repair) → merge')
 assert(idx(/lit_table_merge/) > idx(/tagging shard 1/), 'merge after shards')
 assert(idx(/fulltext fetch launch/) > idx(/lit_table_merge/), 'fulltext after lit_table')
 assert(find(/^sh: spawn r1,r2/), 'spawn')

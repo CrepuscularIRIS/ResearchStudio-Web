@@ -722,22 +722,43 @@ async function intakeStage(st) {
 }
 
 async function tagShards(p0, runName, phaseName) {
-  // Contiguous slices ≤15 papers, ≤3 shards, tagged in parallel, merged by RS's validating merger.
-  const split = PY + ' - ' + shq(p0) + ' <<\'PYEOF\'\nimport json, math, sys\np = sys.argv[1]\ndoc = json.load(open(p + "/lit_results.json"))\npapers = doc["papers"] if isinstance(doc, dict) and "papers" in doc else doc\nn = max(1, min(3, math.ceil(len(papers) / 15)))\nsize = math.ceil(len(papers) / n)\nfor i in range(n):\n    json.dump(papers[i * size:(i + 1) * size], open(p + "/lit_slice%d.json" % i, "w"), indent=1, ensure_ascii=False)\nprint("SHARDS", n, len(papers))\nPYEOF'
+  // Contiguous slices of ≤15 papers (as many shards as that takes), tagged in parallel; then a deterministic CLEAN step drops malformed /
+  // unknown / duplicate rows and lists the papers still missing; ONE repair seat re-tags only those; RS's validating merger assembles.
+  // (The 2026-09-07 t1 run capped shards at 3 → 43 papers each; the GLM seat silently skipped four off-topic papers twice → no lit_table.)
+  const split = PY + ' - ' + shq(p0) + ' <<\'PYEOF\'\nimport json, math, sys\np = sys.argv[1]\ndoc = json.load(open(p + "/lit_results.json"))\npapers = doc["papers"] if isinstance(doc, dict) and "papers" in doc else doc\nn = max(1, math.ceil(len(papers) / 15))\nsize = math.ceil(len(papers) / n)\nfor i in range(n):\n    json.dump(papers[i * size:(i + 1) * size], open(p + "/lit_slice%d.json" % i, "w"), indent=1, ensure_ascii=False)\nprint("SHARDS", n, len(papers))\nPYEOF'
   const r = await sh(split, runName + ' split lit_results', { phase: phaseName, timeout: 60000 })
   const m = /SHARDS (\d+) (\d+)/.exec(r.out)
   if (!m) throw new Error('could not slice lit_results.json: ' + r.out.slice(-300))
   const n = Number(m[1])
   log(runName + ': tagging ' + m[2] + ' papers in ' + n + ' shard(s)')
+  const NOTES = 'Rows only, 9 cells each, one row per paper of the slice, no header, no fence. EVERY paper of the slice gets a row — an off-topic paper is tagged outside_taxonomy, never skipped; the merger counts rows against lit_results.json.'
   const results = await parallel(Array.from({ length: n }, (_, i) => () => seat('tagging', {
     run: runName, step: 'Phase 0 pattern tagging — shard ' + i + ' of ' + n,
     inputs: [p0 + '/lit_slice' + i + '.json  (the papers of this shard, in order)'],
     output: p0 + '/lit_rows_shard' + i + '.md',
-    notes: 'Rows only, 9 cells each, one row per paper of the slice, no header, no fence.',
+    notes: NOTES,
   }, runName + ': tagging shard ' + i, phaseName)))
   const bad = results.map((x, i) => (x && x.ok ? null : i)).filter((x) => x !== null)
-  if (bad.length) throw new Error('tagging shards failed: ' + bad.join(','))
-  const shards = Array.from({ length: n }, (_, i) => shq(p0 + '/lit_rows_shard' + i + '.md')).join(' ')
+  if (bad.length) log(runName + ': tagging shard(s) ' + bad.join(',') + ' returned no result — their papers go to the repair seat')
+  // CLEAN: keep only well-formed rows of known, unseen paper_ids; write the still-missing papers as the repair slice.
+  const clean = PY + ' - ' + shq(p0) + ' ' + n + ' <<\'PYEOF\'\nimport json, sys\np, n = sys.argv[1], int(sys.argv[2])\ndoc = json.load(open(p + "/lit_results.json"))\npapers = doc["papers"] if isinstance(doc, dict) and "papers" in doc else doc\nwant = {str(x.get("paper_id") or x.get("id") or "") for x in papers}\nseen, dropped = set(), 0\nfor i in range(n):\n    fn = p + "/lit_rows_shard%d.md" % i\n    try: lines = open(fn, encoding="utf-8").read().splitlines()\n    except FileNotFoundError: lines = []\n    keep = []\n    for ln in lines:\n        s = ln.strip()\n        if not s or s.startswith("|---") or "paper_id | year_month" in s: continue\n        cells = [c.strip() for c in s.strip("|").split("|")]\n        if len(cells) != 9 or cells[0] not in want or cells[0] in seen: dropped += 1; continue\n        seen.add(cells[0]); keep.append(s)\n    open(fn, "w", encoding="utf-8").write("\\n".join(keep) + ("\\n" if keep else ""))\nmissing = [x for x in papers if str(x.get("paper_id") or x.get("id") or "") not in seen]\njson.dump(missing, open(p + "/lit_slice_repair.json", "w"), indent=1, ensure_ascii=False)\nprint("MISSING", len(missing), "dropped", dropped)\nPYEOF'
+  const c = await sh(clean, runName + ' clean shards', { phase: phaseName, timeout: 60000 })
+  const mm = /MISSING (\d+)/.exec(c.out)
+  if (!mm) throw new Error('shard clean step failed: ' + c.out.slice(-300))
+  const missing = Number(mm[1])
+  let shardFiles = Array.from({ length: n }, (_, i) => p0 + '/lit_rows_shard' + i + '.md')
+  if (missing > 0) {
+    log(runName + ': ' + missing + ' paper(s) without a valid row — one repair seat re-tags exactly those')
+    const rr = await seat('tagging', {
+      run: runName, step: 'Phase 0 pattern tagging — repair (' + missing + ' missing papers)',
+      inputs: [p0 + '/lit_slice_repair.json  (only the papers whose rows were missing, malformed or duplicated — every one of them needs a row)'],
+      output: p0 + '/lit_rows_shard_repair.md',
+      notes: NOTES,
+    }, runName + ': tagging repair', phaseName)
+    if (!rr || !rr.ok) throw new Error('tagging repair seat failed: ' + ((rr && rr.note) || 'no result'))
+    shardFiles = shardFiles.concat([p0 + '/lit_rows_shard_repair.md'])
+  }
+  const shards = shardFiles.map(shq).join(' ')
   const merge = await sh(RS + ' lit_table_merge --out ' + shq(p0) + ' --shards ' + shards + '; echo "__RC0=$?"', runName + ' lit_table_merge', { phase: phaseName, timeout: 120000 })
   if (!/__RC0=0/.test(merge.out)) {
     await sh('cd ' + shq(p0) + ' && for f in lit_rows_shard*.md; do mv "$f" "$f.bad"; done; true', runName + ' discard shards', { phase: phaseName, timeout: 60000 })

@@ -73,7 +73,7 @@ def test_mock_runtime_happy_path() -> None:
     _run_mock({})
 
 
-@pytest.mark.parametrize("env", [{"MOCK_VALIDATE_FAIL": "1"}, {"MOCK_DBLP_TIMEOUT": "1"}, {"MOCK_PLACEHOLDER": "1"}, {"MOCK_ASTRA_FAIL": "1"}, {"MOCK_NEG_ANCHORS": "1"}])
+@pytest.mark.parametrize("env", [{"MOCK_VALIDATE_FAIL": "1"}, {"MOCK_DBLP_TIMEOUT": "1"}, {"MOCK_PLACEHOLDER": "1"}, {"MOCK_ASTRA_FAIL": "1"}, {"MOCK_NEG_ANCHORS": "1"}, {"MOCK_TAG_MISSING": "1"}])
 def test_mock_runtime_variants(env: dict[str, str]) -> None:
-    """validate-fail repair loop, dblp circuit breaker, placeholder warning, Astra→Opus fallback on the 2.3 seat, failure cards as negative anchors (Phase 1 / ideate / 3.2 only)."""
+    """validate-fail repair loop, dblp circuit breaker, placeholder warning, Astra→Opus fallback on the 2.3 seat, failure cards as negative anchors (Phase 1 / ideate / 3.2 only), tagging repair seat for missing rows."""
     _run_mock(env)
