@@ -73,7 +73,25 @@ def test_mock_runtime_happy_path() -> None:
     _run_mock({})
 
 
-@pytest.mark.parametrize("env", [{"MOCK_VALIDATE_FAIL": "1"}, {"MOCK_DBLP_TIMEOUT": "1"}, {"MOCK_PLACEHOLDER": "1"}, {"MOCK_SEAT_FAIL": "1"}, {"MOCK_NEG_ANCHORS": "1"}, {"MOCK_TAG_MISSING": "1"}, {"MOCK_SEAT_MODELS": "1"}])
+@pytest.mark.parametrize("env", [{"MOCK_VALIDATE_FAIL": "1"}, {"MOCK_DBLP_TIMEOUT": "1"}, {"MOCK_PLACEHOLDER": "1"}, {"MOCK_SEAT_FAIL": "1"}, {"MOCK_NEG_ANCHORS": "1"}, {"MOCK_TAG_MISSING": "1"}, {"MOCK_SEAT_MODELS": "1"}, {"MOCK_SECOND_KILL": "1"}])
 def test_mock_runtime_variants(env: dict[str, str]) -> None:
-    """validate-fail repair loop, dblp circuit breaker, placeholder warning, Opus→GLM fallback on the 2.3 seat, args.seat_models override (spec → opus), failure cards as negative anchors (Phase 1 / ideate / 3.2 only), tagging repair seat for missing rows."""
+    """validate-fail repair loop, dblp circuit breaker, placeholder warning, Opus→GLM fallback on the 2.3 seat, args.seat_models override (spec → sol), second auditor's abandon → revise, failure cards as negative anchors (Phase 1 / ideate / 3.2 only), tagging repair seat for missing rows."""
     _run_mock(env)
+
+
+@pytest.mark.parametrize("k3,second,kills,expect", [("advance", "advance", "0", "advance"), ("advance", "abandon", "0", "revise"), ("advance", "abandon", "1", "abandon"),
+                                                    ("revise", "advance", "0", "revise"), ("abandon", "advance", "0", "abandon"), ("advance", "revise", "0", "revise")])
+def test_audit_merge_rule(tmp_path: Path, k3: str, second: str, kills: str, expect: str) -> None:
+    """AUDIT_MERGE_PY (extracted from the logic, never duplicated): K3 owns the verdict; the second auditor can force revise and add targets; abandon alone only with args.second_auditor_kills."""
+    import json
+    logic = (WORKSPACE / ".research" / "tools" / "brain_src" / "brain.logic.js").read_text(encoding="utf-8")
+    py = re.search(r"const AUDIT_MERGE_PY = `(.*?)`\n", logic, re.S).group(1)
+    a, b = tmp_path / "k3.json", tmp_path / "second.json"
+    a.write_text(json.dumps({"verdict": k3, "verdict_rationale": "k3 says", "revision_targets": [{"scope": "tactical", "field": "core_mechanism", "what": "x"}] if k3 == "revise" else []}))
+    b.write_text(json.dumps({"verdict": second, "verdict_rationale": "second says", "revision_targets": [{"scope": "tactical", "field": "core_mechanism", "what": "dup"}, {"scope": "falsification", "field": "falsification_prediction", "what": "new"}] if second != "advance" else []}))
+    proc = subprocess.run(["python3", "-", str(a), str(b), "gpt-5.6-sol", kills], input=py, capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr[-500:]
+    out = json.loads(a.read_text())
+    assert out["verdict"] == expect and out["second_opinion"]["verdict"] == second, proc.stdout
+    if second != "advance": assert any(t.get("source") == "second_auditor" for t in out["revision_targets"]) and len({(t["scope"], t["field"]) for t in out["revision_targets"]}) == len(out["revision_targets"])
+    if expect != k3: assert "second auditor" in out["verdict_rationale"]

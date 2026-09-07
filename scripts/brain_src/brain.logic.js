@@ -38,6 +38,7 @@ const NEGATIVE_ANCHORS = Array.isArray(A.negative_anchors) ? A.negative_anchors.
 // args.models = {opus, glm, k3} and args.runner_model; effort is set explicitly on every seat.
 const MODEL = Object.assign({ opus: 'claude-opus-5', glm: 'glm-5.3[1m]', k3: 'k3-256k', sol: 'gpt-5.6-sol', astra: 'gpt-6-astra' }, A.models || {})   // sol / astra = Codex-OAuth models on LiteLLM :4001 (quota-limited: keep them on one-call seats; a model whose quota is gone hangs in API retries and never reaches the seat fallback)
 const RUNNER_MODEL = A.runner_model || MODEL.glm
+const SECOND_KILLS = !!A.second_auditor_kills   // false: the second auditor can force `revise` and add revision_targets, never `abandon` alone; true: either auditor's abandon kills
 const STAGGER = !!A.stagger   // true: 2.1+2.2 one run at a time so RS's CROSS-RUN DEDUP line sees earlier candidates (+~15 min per extra run)
 
 const shq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
@@ -333,6 +334,26 @@ for p in sys.argv[1:]:
 print("__OUT_BAD " + " | ".join(bad) if bad else "__OUT_OK" + (" warn: " + " | ".join(warn) if warn else ""))`
 
 // ranking.json against rubric.md / calibration.md: recomputed weighted score, deduction blocks, fatal gates.
+const AUDIT_MERGE_PY = `import json, sys
+a, b, model, kills = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1"
+k3 = json.load(open(a)); s = json.load(open(b))
+v1, v2 = k3.get("verdict"), s.get("verdict")
+rt = list(k3.get("revision_targets") or []); seen = {(t.get("scope"), t.get("field")) for t in rt if isinstance(t, dict)}; added = 0
+for t in (s.get("revision_targets") or []):
+    if isinstance(t, dict) and (t.get("scope"), t.get("field")) not in seen:
+        rt.append(dict(t, source="second_auditor")); seen.add((t.get("scope"), t.get("field"))); added += 1
+final = v1
+if v1 == "abandon" or (kills and v2 == "abandon"): final = "abandon"
+elif v1 == "advance" and v2 in ("revise", "abandon"): final = "revise"
+if final == "revise" and not rt:
+    rt = [{"scope": "tactical", "field": "core_mechanism_reasoning", "source": "second_auditor", "what": "address the second auditor's rationale: " + str(s.get("verdict_rationale"))[:400]}]
+k3["verdict"] = final; k3["revision_targets"] = rt
+k3["second_opinion"] = {"model": model, "verdict": v2, "verdict_rationale": s.get("verdict_rationale"), "added_targets": added,
+                        "rule": ("either auditor may abandon" if kills else "K3 owns the verdict; the second auditor can force revise and add targets, never abandon alone")}
+if final != v1: k3["verdict_rationale"] = str(k3.get("verdict_rationale") or "") + " [second auditor " + model + " voted " + str(v2) + " -> " + final + "; see second_opinion]"
+json.dump(k3, open(a, "w"), indent=2, ensure_ascii=False)
+print("AUDIT_MERGE k3=%s second=%s final=%s added_targets=%d" % (v1, v2, final, added))
+`
 const RANK_CHECK_PY = `import json, sys
 p, runs = sys.argv[1], json.loads(sys.argv[2])
 W = {"problem_importance": 12, "novelty": 14, "conceptual_innovation": 12, "method_soundness": 14, "elegance": 8, "feasibility": 8, "experimental_convincibility": 10, "venue_fit": 8, "timeliness": 6, "acceptance_potential": 8}
@@ -539,7 +560,7 @@ const SEATS = {
   generate:  { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['ideate_generate'], refs: ['subpatterns_overview'] },
   cite_fix:  { model: MODEL.opus, effort: 'medium', tools: 'readwrite', prompts: [], refs: ['subpatterns_overview'] },
   coherence: { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'exec', prompts: ['coherence_trace'], refs: [] },   // 2.3 = derivation seat (T1 formalize / T2 executed dry-run / T4 claim grading / T5 naive) — the heaviest seat (20–30 tool calls, ~25 min); Astra's quota died here twice on 2026-09-07 → Opus (fresh context ≠ the 2.2 author context), GLM if Opus fails
-  audit:     { model: MODEL.k3, effort: 'high', tools: 'readwrite', prompts: ['critique'], refs: ['anti_patterns', 'ccf_strict_review', 'ccf_blueprint', 'arft_guide'] },
+  audit:     { model: MODEL.k3, second: MODEL.sol, effort: 'high', tools: 'readwrite', prompts: ['critique'], refs: ['anti_patterns', 'ccf_strict_review', 'ccf_blueprint', 'arft_guide'] },   // 3.2 kill seat: K3 owns the verdict; Sol (same prompt, own context, in PARALLEL — no extra hop) writes second_opinion.json; AUDIT_MERGE_PY folds it in (owner 2026-09-07: 'K3 + Sol together; if Sol cannot kill, let it review')
   recheck:   { model: MODEL.k3, effort: 'medium', tools: 'readwrite', prompts: ['refutation_recheck'], refs: [] },
   revise:    { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['revise'], refs: [] },
   reaudit:   { model: MODEL.k3, effort: 'medium', tools: 'readwrite', prompts: ['falsification_reaudit'], refs: [] },
@@ -550,9 +571,9 @@ const SEATS = {
   writeup:   { model: MODEL.glm, effort: 'low', tools: 'readwrite', prompts: [], refs: [] },
   tagging:   { model: MODEL.glm, effort: 'low', tools: 'readwrite', prompts: ['tagging_shard'], refs: ['rubric', 'patterns_overview'] },
   intake:    { model: MODEL.glm, effort: 'medium', tools: 'repo',      prompts: ['intake'], refs: ['intake_routing', 'intent_recognition', 'ccf_idea_intake', 'aris_compute_env', 'aris_evidence_precheck'] },
-  evidence:  { model: MODEL.sol, fallback: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['evidence_plan'], refs: ['ccf_evidence_design', 'ccf_result_templates', 'aris_experiment_plan', 'aris_ablation_planner'] },   // Phase 5 = formal experimental design (arms, negative control, keep rule, Lehr MDE): one call per run — Sol (V8's falsifier seat), Opus if Sol fails
+  evidence:  { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'readwrite', prompts: ['evidence_plan'], refs: ['ccf_evidence_design', 'ccf_result_templates', 'aris_experiment_plan', 'aris_ablation_planner'] },   // Phase 5 evidence contract: Opus, GLM if Opus fails (owner 2026-09-07)
   rank:      { model: MODEL.opus, effort: 'high', tools: 'readwrite', prompts: ['rank'], refs: ['ccf_idea_rubric', 'ccf_idea_calibration', 'ccf_strict_review', 'ccf_expert_panel', 'ccf_review_output_standards', 'ccf_venue_adapters', 'ccf_lit_evolution'] },
-  spec:      { model: MODEL.sol, fallback: MODEL.opus, effort: 'high', tools: 'spec', prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },   // Phase 6 = B1 spec compiled against the code (read-only): one call per run — Sol (V8's spec seat), Opus if Sol fails
+  spec:      { model: MODEL.opus, fallback: MODEL.glm, effort: 'high', tools: 'spec', prompts: ['spec'], refs: ['asi_task_yaml', 'asi_prompt_b1', 'asi_how_scoring'] },   // Phase 6 B1 spec against the code (read-only): Opus, GLM if Opus fails (owner 2026-09-07)
 }
 // args.seat_models = { <seat>: 'opus' | 'glm' | 'k3' | 'sol' | 'astra' } moves a seat to another routed model without regenerating
 // (quota is a per-day fact, not a design fact); the seat's fallback is untouched.
@@ -819,7 +840,7 @@ const ideateTurn = RUN_IDS.map(() => { let res; const p = new Promise((r) => { r
 
 async function driveRun(id) {
   const rd = ROOT + '/' + id
-  const st = { id, state: 'running', steps: 0, seats: [], fallbacks: [], note: '', validate_rc: null, validate_repairs: 0, validate_note: '', regression_rc: null, placeholders: [], cards: [], evidence_plan: null, quote_check: null, quote_check3: null, plan_check: null, spec: null, spec_check: null }
+  const st = { id, state: 'running', steps: 0, seats: [], fallbacks: [], audit_merge: null, note: '', validate_rc: null, validate_repairs: 0, validate_note: '', regression_rc: null, placeholders: [], cards: [], evidence_plan: null, quote_check: null, quote_check3: null, plan_check: null, spec: null, spec_check: null }
   const lbl = (s) => id + ': ' + s
   const turn = RUN_IDS.indexOf(id)
   let phase1Marked = id !== 'r1'
@@ -838,7 +859,21 @@ async function driveRun(id) {
     if (job && k !== 'terms') notes = notes.replace(/TWO independent actions: \(1\).*?\(2\) run the 2\.3 sub-agent\.\s*/s, 'The 3.1 collision retrieval has already been launched in the background by the workflow — do only the 2.3 work. ')
     const dyn = { rd, run: id, repo: BRIEF.repo, step: em.step, inputs: inputs.concat(brainContext(k, id)), output: em.output, notes }
     if (k === 'coherence') dyn.workdir = rd + '/phase2_coherence'
-    const r = await seat(k, dyn, lbl(em.step), 'Runs', undefined, forceModel)
+    let r
+    if (k === 'audit' && SEATS.audit.second && !forceModel) {
+      // The second auditor runs the SAME audit (prompt, refs, inputs) in parallel on its own model and context, into its own file; the
+      // deterministic merge then folds its vote into K3's file: advance + a second challenge → revise (targets appended); K3's abandon stands.
+      const out2 = rd + '/phase3_critique/second_opinion.json'
+      const dyn2 = Object.assign({}, dyn, { output: out2, notes: (dyn.notes || '') + ' SECOND AUDITOR (Brain addition): you are the second, independent auditor of this candidate — same five checks, same output JSON, written to ' + out2 + ' and nowhere else; the first auditor\'s verdict is not shown to you and the workflow merges the two afterwards.' })
+      const [r1, r2] = await parallel([() => seat(k, dyn, lbl(em.step), 'Runs'), () => seat(k, dyn2, lbl(em.step + ' (second auditor)'), 'Runs', undefined, SEATS.audit.second)])
+      r = r1
+      st.seats.push({ kind: 'audit_second', step: em.step, ok: !!(r2 && r2.ok), signal: (r2 && r2.signal) || '', model: (r2 && r2.model) || SEATS.audit.second })
+      if (r && r.ok && r2 && r2.ok) {
+        const mg = await sh(PY + ' - ' + shq(em.output) + ' ' + shq(out2) + ' ' + shq(SEATS.audit.second) + ' ' + (SECOND_KILLS ? 1 : 0) + ' <<\'PYEOF\'\n' + AUDIT_MERGE_PY + '\nPYEOF', lbl('audit merge'), { phase: 'Runs', timeout: 60000 })
+        const line = /AUDIT_MERGE [^\n]*/.exec(mg.out); st.audit_merge = line ? line[0] : 'merge failed: ' + mg.out.slice(-200)
+        log(id + ' 3.2 ' + st.audit_merge)
+      } else if (r && r.ok) { st.audit_merge = 'second auditor returned no result — K3 verdict stands alone'; log(id + ' 3.2 ' + st.audit_merge) }
+    } else r = await seat(k, dyn, lbl(em.step), 'Runs', undefined, forceModel)
     st.seats.push({ kind: k, step: em.step, ok: !!(r && r.ok), signal: (r && r.signal) || '', model: (r && r.model) || forceModel || SEATS[k].model })
     if (r && r.fell_back) st.fallbacks.push({ kind: k, step: em.step, from: SEATS[k].model, to: r.model })
     if (!r || !r.ok) throw new Error(k + ' seat failed twice: ' + ((r && r.note) || 'no result'))
@@ -1071,7 +1106,7 @@ if (finished.length >= 2) {
 
 return {
   root: ROOT, k: K, direction: DIRECTION,
-  runs: runs.map((r) => ({ id: r.id, state: r.state, steps: r.steps, seats: r.seats.length, fallbacks: r.fallbacks, cards: r.cards, evidence_plan: r.evidence_plan, plan_check: r.plan_check, spec: r.spec, spec_check: r.spec_check,
+  runs: runs.map((r) => ({ id: r.id, state: r.state, steps: r.steps, seats: r.seats.length, fallbacks: r.fallbacks, audit_merge: r.audit_merge, cards: r.cards, evidence_plan: r.evidence_plan, plan_check: r.plan_check, spec: r.spec, spec_check: r.spec_check,
     quote_check: r.quote_check, quote_check3: r.quote_check3, validate_rc: r.validate_rc, validate_repairs: r.validate_repairs, validate_note: r.validate_note, regression_rc: r.regression_rc, placeholders: r.placeholders, note: r.note })),
   ranking, rank_check: rankCheck,
 }

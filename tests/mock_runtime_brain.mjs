@@ -70,6 +70,7 @@ function navigate(rd) {
 let tagRepaired = false
 function runSub(cmd) {
   let m
+  if (/print\("AUDIT_MERGE/.test(cmd)) return process.env.MOCK_SECOND_KILL ? 'AUDIT_MERGE k3=advance second=abandon final=revise added_targets=2' : 'AUDIT_MERGE k3=advance second=advance final=advance added_targets=0'
   if (/print\("MISSING"/.test(cmd)) { if (process.env.MOCK_TAG_MISSING && !tagRepaired) { tagRepaired = true; return 'MISSING 3 dropped 1' } return 'MISSING 0 dropped 0' }
   if (/print\("__QUOTE/.test(cmd)) return '__QUOTE 3/3 verified'
   if ((m = /run\.py'? next --dir '([^']+)'/.exec(cmd))) return navigate(m[1])
@@ -171,7 +172,7 @@ const stub = async (prompt, opts) => {
 const par = async (t) => Promise.all(t.map((f) => f()))
 const AF = Object.getPrototypeOf(async function () {}).constructor
 const main = new AF('args', 'agent', 'parallel', 'pipeline', 'phase', 'log', src)
-const result = await main({ root: ROOT, k: 2, repo: '/mock/repo', dataset: 'NYU', venue: 'PR', goal: 'FROZEN mock goal text', anomalies: '/mock/anomalies.md', skill_dir: SK, stagger: true, negative_anchors: process.env.MOCK_NEG_ANCHORS ? ['/mock/failures/X-001.json'] : undefined, seat_models: process.env.MOCK_SEAT_MODELS ? { spec: 'opus' } : undefined }, stub, par, par, (t) => console.log('── ' + t), (m) => console.log('  ' + m))
+const result = await main({ root: ROOT, k: 2, repo: '/mock/repo', dataset: 'NYU', venue: 'PR', goal: 'FROZEN mock goal text', anomalies: '/mock/anomalies.md', skill_dir: SK, stagger: true, negative_anchors: process.env.MOCK_NEG_ANCHORS ? ['/mock/failures/X-001.json'] : undefined, seat_models: process.env.MOCK_SEAT_MODELS ? { spec: 'sol' } : undefined }, stub, par, par, (t) => console.log('── ' + t), (m) => console.log('  ' + m))
 
 // ---------------------------------------------------------------- assertions
 const seats = calls.filter((c) => c.kind === 'seat')
@@ -229,17 +230,23 @@ if (process.env.MOCK_SEAT_FAIL) {
   assert(coh.length === 2 && coh.every((c) => c.model === 'claude-opus-5'), 'coherence seats on Opus (fresh context, not the 2.2 author context)')
   assert(result.runs.every((r) => r.fallbacks.length === 0), 'no fallbacks on the happy path')
 }
-const SPEC_MODEL = process.env.MOCK_SEAT_MODELS ? 'claude-opus-5' : 'gpt-5.6-sol'   // args.seat_models = { spec: 'opus' } in that variant
+const SPEC_MODEL = process.env.MOCK_SEAT_MODELS ? 'gpt-5.6-sol' : 'claude-opus-5'   // args.seat_models = { spec: 'sol' } in that variant
 const cohR1 = coh.find((c) => c.label.startsWith('r1:'))
 assert(idx(/^sh: r1: collision launch/) < cohR1.i && cohR1.i < idx(/^sh: r1: collision wait 1/), 'collision launched before 2.3 and awaited after')
 
 const aud = seats.filter((c) => /Phase 3\.2/.test(c.label))
-assert(aud.length === 2 && aud.every((c) => c.model === 'k3-256k' && c.prompt.includes('critique.txt (verbatim)') && c.prompt.includes('references/anti-patterns.md (verbatim; inlined') && c.prompt.includes('<each cited C##>.md')), 'audit seats: K3, anti-patterns inlined, card marker passed through')
+const audK3 = aud.filter((c) => c.model === 'k3-256k'), audSol = aud.filter((c) => c.model === 'gpt-5.6-sol')
+assert(audK3.length === 2 && audSol.length === 2 && audSol.every((c) => c.prompt.includes('SECOND AUDITOR') && c.prompt.includes('second_opinion.json')) && audK3.every((c) => !c.prompt.includes('SECOND AUDITOR')), 'per run: one K3 audit + one Sol second auditor, same prompt family, own output file')
+const mergeCalls = calls.filter((c) => /print\("AUDIT_MERGE/.test(c.cmd || ''))
+assert(mergeCalls.length === 2 && mergeCalls.every((c) => c.i > Math.max(...aud.map((a) => a.i)) - 20), 'one deterministic audit merge per run after both auditors')
+assert(result.runs.every((r) => /^AUDIT_MERGE k3=advance second=(advance|abandon) final=(advance|revise)/.test(r.audit_merge || '')), 'merge line recorded per run: ' + JSON.stringify(result.runs.map((r) => r.audit_merge)))
+if (process.env.MOCK_SECOND_KILL) assert(result.runs.every((r) => /final=revise/.test(r.audit_merge)), 'a second-auditor abandon downgrades advance to revise, never to abandon')
+assert(aud.length === 4 && aud.every((c) => c.prompt.includes('critique.txt (verbatim)') && c.prompt.includes('references/anti-patterns.md (verbatim; inlined') && c.prompt.includes('<each cited C##>.md')), 'audit seats: K3, anti-patterns inlined, card marker passed through')
 assert(seats.filter((c) => /Phase 4\.fill/.test(c.label)).every((c) => c.model === 'claude-opus-5' && c.prompt.includes('expand.txt (verbatim)') && c.prompt.includes('formula-derivation/SKILL.md (verbatim; inlined') && c.prompt.includes('KEY EQUATIONS DISCIPLINE')), 'fill on Opus with the ARIS derivation discipline')
 assert(seats.filter((c) => /Phase 4\.derive/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]' && c.effort === 'low'), 'derive on GLM low')
 assert(seats.filter((c) => /Phase 4\.1\.5/.test(c.label)).every((c) => c.model === 'glm-5.3[1m]'), 'implementability on GLM')
 const ev = seats.filter((c) => /Phase 5/.test(c.label))
-assert(ev.length === 2 && ev.every((c) => c.model === 'gpt-5.6-sol' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
+assert(ev.length === 2 && ev.every((c) => c.model === 'claude-opus-5' && c.prompt.includes('brain/evidence_plan.md (verbatim)') && c.prompt.includes('evidence-design.md (verbatim; inlined') && c.prompt.includes('ablation-planner/SKILL.md (verbatim; inlined') && c.prompt.includes('Lehr') && c.prompt.includes('FROZEN GOAL')), 'evidence seats on Opus with CCF + ARIS refs and the Lehr rule')
 const sp = seats.filter((c) => /Phase 6/.test(c.label))
 assert(sp.length === 2 && sp.every((c) => c.model === SPEC_MODEL && c.deny.includes('Bash') && c.deny.includes('Edit') && !c.deny.includes('Glob') && c.prompt.includes('brain/spec.md (verbatim)') && c.prompt.includes('FROZEN GOAL') && c.prompt.includes('task.yaml (verbatim; inlined') && c.prompt.includes('prompt_b1.md (verbatim; inlined') && c.prompt.includes('"gates"')), 'Phase 6 spec seats: Opus, read-only repo, FROZEN, ASI gates form')
 assert(sh.filter((c) => /__PLAN_/.test(c.cmd)).length === 2 && sh.filter((c) => /__SPEC_/.test(c.cmd)).length === 2, 'plan_check and spec_check ran once per run')
@@ -274,7 +281,7 @@ else assert(result.runs.every((r) => r.placeholders.length === 0), 'no placehold
 assert(seats.every((c) => !/Phase 0: produce queries/.test(c.label)), 'runs never see the Phase 0 query step')
 if (process.env.MOCK_NEG_ANCHORS) {
   const na = seats.filter((c) => /Phase 1 —|2\.1 \+ 2\.2|Phase 3\.2/.test(c.label))
-  assert(na.length === 5 && na.every((c) => /NEGATIVE ANCHORS \((Brain addition|hard)/.test(c.prompt) && c.prompt.includes('/mock/failures/X-001.json')), 'negative anchors reach Phase 1, both ideate seats and both audit seats: ' + na.map((c) => c.label.slice(0, 24)).join(','))
+  assert(na.length === 7 && na.every((c) => /NEGATIVE ANCHORS \((Brain addition|hard)/.test(c.prompt) && c.prompt.includes('/mock/failures/X-001.json')), 'negative anchors reach Phase 1, both ideate seats and all four audit seats (K3 + Sol second auditor per run): ' + na.map((c) => c.label.slice(0, 24)).join(','))
   assert(seats.filter((c) => /Phase 4|Phase 5|Phase 6|rank/.test(c.label)).every((c) => !c.prompt.includes('/mock/failures/')), 'negative anchors stay out of the card / plan / spec / rank seats')
 } else assert(seats.every((c) => !c.prompt.includes('/mock/failures/') && !/NEGATIVE ANCHORS \((Brain addition|hard)/.test(c.prompt)), 'no negative-anchor line without args.negative_anchors')
 const ALLOWED = new Set(['claude-opus-5', 'glm-5.3[1m]', 'k3-256k', 'gpt-5.6-sol', 'gpt-6-astra'])
