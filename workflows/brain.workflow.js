@@ -4687,13 +4687,20 @@ Rules: every run appears exactly once with ranks 1..K; the ten dimension keys an
 
 
 // Deterministic checks (run by the runner; they print __PLAN_OK / __PLAN_BAD, __SPEC_OK / __SPEC_BAD, __QUOTE ...).
-const PLAN_CHECK_PY = `import json, re, sys
+const PLAN_CHECK_PY = `import json, os, re, sys
 plan_path, req = sys.argv[1], json.loads(sys.argv[2])
 bad, warn = [], []
 try:
     e = json.load(open(plan_path))
 except Exception as ex:
     print("__PLAN_BAD evidence_plan.json unreadable: " + str(ex)[:120]); sys.exit(0)
+pf = os.path.join(os.path.dirname(plan_path), "plan_findings.json")
+if os.path.exists(pf) and os.path.getmtime(pf) > os.path.getmtime(plan_path):
+    try:
+        F = json.load(open(pf)); items = F.get("findings") or []
+        bad.append("L2 findings from the experiment side (%s: the spec review found scientific decisions this plan left open; decide them here, in the plan, never in the spec): " % F.get("x_id") + " || ".join(str(i.get("class", "")) + " @ " + str(i.get("anchor", ""))[:60] + ": " + str(i.get("note", ""))[:220] for i in items[:8]))
+    except Exception as ex:
+        bad.append("plan_findings.json unreadable: " + str(ex)[:80])
 blocks = e.get("blocks") or []; ids = [b.get("block_id") for b in blocks]
 claims = e.get("claim_map") or []
 if not claims: bad.append("claim_map empty")
@@ -4955,10 +4962,11 @@ Return the structured result: rc = the command's exit code; out = its stdout fol
 
 // Every command is wrapped in a group with a workflow-owned exit sentinel; rc is parsed from the
 // sentinel, never taken from the runner's own report (which normalized or invented markers once).
+let SH_SEQ = 0   // every runner prompt carries its position: resumeFromRunId caches by prompt text, and `run.py next` is the same text in every cycle — without the stamp a resumed run replays an old navigator emit (ccf 19:05: 3.2 ran on a candidate whose 2.3 never finished)
 async function sh(cmd, label, opts = {}) {
   const timeout = opts.timeout || 600000
   const wrapped = '{\n' + cmd + '\n}\necho "__SH_RC=$?"'
-  const prompt = RUNNER_FRAME + '\n\nBash timeout: ' + timeout + ' ms\n\n---- COMMAND ----\n' + wrapped + '\n---- END ----\n'
+  const prompt = RUNNER_FRAME + '\n\nBash timeout: ' + timeout + ' ms\nCALL #' + (++SH_SEQ) + ' of this workflow run\n\n---- COMMAND ----\n' + wrapped + '\n---- END ----\n'
   const r = await agent(prompt, { label: ('sh: ' + label).slice(0, 60), phase: opts.phase || 'Runs', schema: RUN_SCHEMA, model: RUNNER_MODEL, effort: 'low', disallowedTools: DENY.runner })
   if (!r) return { rc: -1, out: '', sentinel: false }
   const raw = String(r.out || '')
@@ -5397,6 +5405,10 @@ async function driveRun(id) {
     if (k === 'coherence') {
       dyn.workdir = rd + '/phase2_coherence'
       await prep('rm -f ' + shq(rd + '/phase2_coherence/blocking_findings.json') + ' ' + shq(rd + '/phase2_coherence/refined_candidate.json'), lbl('prep 2.3 (clear stale side outputs)'), 'Runs')   // a previous, unfinished attempt must not hand 3.2 stale findings
+    }
+    if (k === 'audit') {                              // gate invariant: 3.2 never judges a candidate whose 2.3 report does not exist (fail closed; never audit from raw 2.2)
+      const g = await sh('[ -s ' + shq(rd + '/phase2_coherence/phase2_coherence_output.json') + ' ] && echo GATE_OK || echo GATE_MISSING', lbl('2.3 gate check'), { phase: 'Runs', timeout: 30000 })
+      if (!/GATE_OK/.test(g.out)) throw new Error('3.2 requested but phase2_coherence/phase2_coherence_output.json is missing — the coherence gate must complete first')
     }
     let r
     if (k === 'audit' && SEATS.audit.second && !forceModel) {

@@ -95,3 +95,18 @@ def test_audit_merge_rule(tmp_path: Path, k3: str, second: str, kills: str, expe
     assert out["verdict"] == expect and out["second_opinion"]["verdict"] == second, proc.stdout
     if second != "advance": assert any(t.get("source") == "second_auditor" for t in out["revision_targets"]) and len({(t["scope"], t["field"]) for t in out["revision_targets"]}) == len(out["revision_targets"])
     if expect != k3: assert "second auditor" in out["verdict_rationale"]
+
+
+def test_plan_check_consumes_l2_findings(tmp_path: Path) -> None:
+    """PLAN_CHECK_PY (extracted from the logic): a plan_findings.json newer than the plan is a BAD finding (the repair seat gets it); an older one is ignored."""
+    import json, os, time
+    logic = (WORKSPACE / ".research" / "tools" / "brain_src" / "brain.logic.js").read_text(encoding="utf-8")
+    py = re.search(r"const PLAN_CHECK_PY = `(.*?)`\n", logic, re.S).group(1).replace("\\\\", "\\")
+    plan = {"claim_map": [{"claim_id": "C1", "evidence_block": "B1", "load_bearing_variable": "gate", "primary": True}], "run_order": ["B1"], "kill_conditions": ["x"], "frozen_untouched": ["y"], "total_gpu_h": 4,
+            "blocks": [{"block_id": "B1", "negative_control": "gate permuted", "keep_rule": "delta > 0.05", "arms": ["a"], "gpu_h": 1, "seed_sd": 0.1, "min_effect": 0.5, "seeds": 3, "role": "anchor", "failure_interpretation": "f"}]}
+    p = tmp_path / "phase5"; p.mkdir(); (p / "evidence_plan.json").write_text(json.dumps(plan))
+    r = subprocess.run(["python3", "-", str(p / "evidence_plan.json"), "[]"], input=py, capture_output=True, text=True); assert r.stdout.startswith("__PLAN_OK"), r.stdout + r.stderr
+    time.sleep(0.05); (p / "plan_findings.json").write_text(json.dumps({"x_id": "X-9", "findings": [{"class": "A.6", "anchor": "spec.json:1", "note": "threshold left open"}]}))
+    r = subprocess.run(["python3", "-", str(p / "evidence_plan.json"), "[]"], input=py, capture_output=True, text=True); assert r.stdout.startswith("__PLAN_BAD") and "L2 findings" in r.stdout and "threshold left open" in r.stdout, r.stdout
+    time.sleep(0.05); os.utime(p / "evidence_plan.json", None)      # repaired plan is newer than the findings
+    r = subprocess.run(["python3", "-", str(p / "evidence_plan.json"), "[]"], input=py, capture_output=True, text=True); assert r.stdout.startswith("__PLAN_OK"), r.stdout

@@ -22,3 +22,5 @@ description: "Experiment review — the cross-family reviewer (Grok CLI, read-on
    - code：pass → `/exp-launch`；blocked → `/exp-build` fix（帽 2+1，超帽 → 回 Brain）。
    - process：survived → `/exp-next`；L0/L1 → `/exp-build` fix；L2–L4 → `failure_card.py`；critic_failed → 重跑本步，永不 survived。
 3. 不与 finding 争论：blocking 只能在代码里解决或写进 `blockers.json` 的 resolution；解决后重跑同一模式。
+
+> L2（spec 留了科学决定）不杀 idea：`failure_card.py` 会写 `phase5/plan_findings.json` 并退役该 spec，导航器随后给 Brain 的 plan repair；只有 L3/L4 走 backup → retrigger（worker 设计 §15）。

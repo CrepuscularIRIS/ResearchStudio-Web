@@ -329,3 +329,22 @@ def test_spec_check_plan_binding(tmp_path: Path) -> None:
     out = check(spec(verdict_rule=dict(ok["verdict_rule"], keep_if_all=[{"key": "delta", "op": "gt", "value": 0.9}]))); assert "__SPEC_BAD" in out and "threshold the Worker invented" in out, out
     out = check(dict(ok, kill_condition="whatever the worker likes")); assert "__SPEC_BAD" in out and "kill_condition is not one of the plan" in out, out
     out = check(dict(ok, forbids=["test_half"])); assert "__SPEC_BAD" in out and "frozen_untouched" in out and "m152" in out, out
+
+
+def test_navigator_l2_plan_repair(tmp_path: Path) -> None:
+    """An L2 card (the spec left a scientific decision open) is not a dead idea: failure_card writes phase5/plan_findings.json and retires the
+    drafted spec; the navigator asks for a Brain PLAN REPAIR on the same root (no retrigger); once the plan is newer than the card the block is
+    claimable again and its spec is re-drafted."""
+    root = make_run_root(tmp_path); env = {"EXP_SANDBOX": str(tmp_path)}
+    json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
+    r = run(sys.executable, EXP / "precheck.py", root, "--repo", tmp_path / "repo", "--x", "X-970", env=env); assert r.returncode == 0, r.stdout
+    bd = tmp_path / "build" / "X-970"; (bd / "findings").mkdir(exist_ok=True)
+    json.dump({"failure_level": "L2", "outcome": "L2"}, open(bd / "route.json", "w"))
+    json.dump({"findings": [{"anchor": "spec.json:1", "class": "A.6", "blocking": True, "note": "keep_if_all threshold not decided by the plan"}]}, open(bd / "findings" / "spec.json", "w"))
+    _set(tmp_path, "X-970", status="killed", failure_level="L2", spec_review="L2")
+    r = run(sys.executable, EXP / "failure_card.py", "X-970", env=env); assert r.returncode == 0, r.stdout + r.stderr
+    pf = root / "r1" / "phase5" / "plan_findings.json"; assert pf.exists() and json.load(open(pf))["findings"][0]["class"] == "A.6"
+    assert not (root / "r1" / "spec" / "B1.json").exists() and (root / "r1" / "spec" / "B1.L2-X-970.json").exists()
+    d = _nav(root, env); assert d["phase"] == "BRAIN" and "plan repair" in d["state"] and any("brain.workflow.js" in c for c in d["run"]) and not d["blocked"], d
+    time.sleep(0.05); os.utime(root / "r1" / "phase5" / "evidence_plan.json", None)      # the Brain repaired the plan: newer than the card
+    d = _nav(root, env); assert d["phase"] == "EXPERIMENT" and d["skill"] == "exp-spec" and "--block B1" in d["skill_args"], d

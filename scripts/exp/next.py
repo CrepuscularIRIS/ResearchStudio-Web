@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import BUILD, EXPERIMENTS, FAILURES, WS, jload, load_x, FIX_CAP, REIMPL_CAP, brain_lock_state, BRAIN_STALE_MIN
 
-TERMINAL = {"survived"}
+TERMINAL = {"survived", "carded"}
 EXP = ".research/tools/exp"
 DEFAULT_BRAIN_ROUNDS = 2         # rounds per lineage: the first Brain run + one re-trigger with negative anchors; args.max_brain_rounds overrides
 
@@ -38,11 +38,23 @@ def brain_done(root: Path, k: int) -> bool:
     return (root / "ranking.json").exists() if k >= 2 else (root / "r1" / "phase5" / "evidence_plan.json").exists()
 
 
+def card_level(X: dict) -> str | None:
+    card = Path(X["failure_card"]) if X.get("failure_card") else FAILURES / f"{X.get('id')}.json"
+    c = (jload(card, {}) or {}) if card.exists() else {}
+    return X.get("failure_level") or c.get("level") or c.get("outcome")
+
+
 def dead(X: dict) -> bool:
-    """A block is dead for this idea once its failure card exists (or the ledger says carded); only Brain can move it."""
+    """A block is dead for this idea once its failure card exists (or the ledger says carded). Exception: an L2 card (the spec left a
+    scientific decision open) is answered by a PLAN repair on the same root — once evidence_plan.json is newer than the card, the block is
+    claimable again (its retired spec is re-drafted from the repaired plan)."""
     s, lvl = X.get("status"), X.get("failure_level")
     card = Path(X["failure_card"]) if X.get("failure_card") else FAILURES / f"{X.get('id')}.json"
-    return s == "carded" or (s in ("killed", "invalid", "fix_needed") and lvl in ("L2", "L3", "L4") and card.exists())
+    if not (s == "carded" or (s in ("killed", "invalid", "fix_needed") and lvl in ("L2", "L3", "L4") and card.exists())): return False
+    if card.exists() and card_level(X) == "L2":
+        plan = Path(X.get("run_root") or "") / (X.get("run") or "") / "phase5" / "evidence_plan.json"
+        if plan.exists() and plan.stat().st_mtime > card.stat().st_mtime: return False
+    return True
 
 
 def ledger_for(root: Path, run: str | None = None) -> list:
@@ -71,6 +83,17 @@ def pick_run(root: Path) -> str | None:
 
 
 def after_all_dead(root: Path, args: dict) -> dict:
+    deads = [X for X in ledger_for(root) if dead(X)]
+    if deads and all(card_level(X) == "L2" for X in deads):
+        # every death is an L2: the plan left scientific decisions open → repair the PLAN on this root (the Brain resumes from disk and only
+        # Phase 5 re-runs, fed by phase5/plan_findings.json); the idea is kept, the retired spec is re-drafted afterwards
+        who = ", ".join(f"{X.get('run')}/{X.get('block_id')} ({X.get('id')})" for X in deads)
+        return emit("BRAIN", f"plan repair: {who} died L2 (the spec review found decisions the plan left open) — re-run the Brain on this root; Phase 5 repairs evidence_plan.json from plan_findings.json, everything else is kept",
+                    skill="brain", skill_args=str(root / "args.json"),
+                    run=[f"python3 {EXP}/brain_lock.py {root} acquire   # exit 3 = in flight: do not launch",
+                         f'Workflow({{scriptPath: ".claude/workflows/brain.workflow.js", args: <contents of {root / "args.json"}>}})',
+                         f"python3 {EXP}/brain_lock.py {root} release   # always, whatever the Workflow returned"],
+                    note="same root, same idea: the Brain's Phase 5 pre-check sees plan_findings.json newer than the plan and runs the repair seat; when evidence_plan.json is newer than the card the block is claimable again and /exp-spec re-drafts it")
     cards = cards_for(root)
     rnd, cap = int(args.get("brain_round") or 1), int(args.get("max_brain_rounds") or DEFAULT_BRAIN_ROUNDS)
     dead_runs = ", ".join(f"{X.get('run')}/{X.get('block_id')}→{X.get('failure_level')}" for X in ledger_for(root) if dead(X))

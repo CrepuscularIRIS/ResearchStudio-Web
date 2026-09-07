@@ -70,6 +70,7 @@ function navigate(rd) {
 let tagRepaired = false, bashFailed = false
 function runSub(cmd) {
   let m
+  if (/echo GATE_OK \|\| echo GATE_MISSING/.test(cmd)) { const p = /\[ -s '([^']+)' \]/.exec(cmd)[1]; return has(p) ? 'GATE_OK' : 'GATE_MISSING' }
   if (/print\("PACKET/.test(cmd)) return 'PACKET 41234 chars 20 hits'
   if (/print\("AUDIT_MERGE/.test(cmd)) return process.env.MOCK_SECOND_KILL ? 'AUDIT_MERGE k3=advance second=abandon final=revise added_targets=2' : 'AUDIT_MERGE k3=advance second=advance final=advance added_targets=0'
   if (/print\("MISSING"/.test(cmd)) { if (process.env.MOCK_TAG_MISSING && !tagRepaired) { tagRepaired = true; return 'MISSING 3 dropped 1' } return 'MISSING 0 dropped 0' }

@@ -394,3 +394,17 @@ owner 判决："Phase 6 做了太多不该做的事；RS + ARIS 足够，CCF 顶
 - **PLAN ⊆ SPEC**（`spec_check.py` 新增，确定性）：keep_if_all 的数字只能来自本块 keep_rule；kill_condition 是计划里的一条；forbids 覆盖 frozen_untouched；负对照臂对应计划的负对照。Worker 只补工程，科学决定动不了（ARFT R3）。之后照旧 `/exp-next` 封印 + `/exp-critic spec`（Grok 跨族审）。
 - **审计席读取上限**：K3 的输入 = 原 emit 输入去掉 phase0 语料 + `lit_table_slice.md`（碰撞命中论文的行）+ 紧凑包；READ BUDGET 行禁止读列表之外的文件、禁止重复读。Sol 只有包（见 §9j）。
 - CCF 引用保留（rank / P5 / 3.2 的 strict_review 等），实测它们不花墙钟；砍不砍是内容判断，不是时间判断。
+
+## 9l. Codex 轨迹审计的结论与三处补修（2026-09-07 深夜；35 项测试全绿）
+
+Codex 逐条读了两腿 89 个 agent 的记录（全文：`2026-09-07-brain-ccf-trajectory-audit-codex.md`）。与 §9i 一致的部分不重复；它多抓到的三条及修法：
+
+| Codex 发现 | 修法 |
+|---|---|
+| **19:05 的 resume 不只回放了 K3 的裁决，连 `run.py next` 的 runner 结果也被回放**（同一条命令文本），于是 3.2 在一个 2.3 从未完成的候选上跑了——最终那张卡从未过连贯门 | runner 提示词加 `CALL #n`（与席位的 `SEAT #n` 同理）；3.2 前加**门不变量**：`phase2_coherence_output.json` 不存在就抛错，永不从原始 2.2 审计 |
+| Phase 6 两席 169 次工具调用、写了 77 万字符（B3–B6 各写三遍）；spec_check 拒的是"块自己要创建的文件不存在" | Phase 6 已整体下放（§9k）；`function: NEW file` 规则进 spec_check |
+| RS 的 abandon → 整个 Phase 2 重来，而那次审计只否定了机制，没否定 gap；建议给裁决加 `retry_scope`（mechanism_only 只重跑 2.2） | 未做（改 RS 的 next_step.py 策略，需 owner 决定）；记为后续第 1 项 |
+| runner 开销 10 分钟/腿（3%），不是主因 | 不动 |
+| 不该动的：2.3 独立上下文、确定性校验、K3 主判 | 保持 |
+
+**L2 回流环（同时补上）**：ccf 的 X-001 spec 审出 L2（4×A.6 + A.2：spec 留了科学决定），旧梯子把它当"idea 死了"去重触发新根——错。现在 L2 的正确回路：`failure_card.py` 写 `phase5/plan_findings.json` 并把起草的 spec 退役（`B1.L2-<X>.json`）→ 导航器给 **plan repair**（同根重发 Brain，只有 Phase 5 的 plan_check 看到 findings 比计划新而进修复席）→ 计划比卡新之后该块重新可领 → `/exp-spec` 按修好的计划重写 spec。只有非 L2 的死亡才走 backup → retrigger。

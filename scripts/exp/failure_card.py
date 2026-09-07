@@ -28,6 +28,14 @@ def main() -> int:
             "reasons": V.get("reasons"), "spec_sha": X.get("spec_sha"), "written_at": now()}
     jsave(FAILURES / f"{xid}.json", card)
     X["failure_card"] = str(FAILURES / f"{xid}.json"); X["status"] = "carded"; save_x(xid, X)
+    if (card["level"] or card["outcome"]) == "L2" and X.get("run_root") and X.get("run"):
+        # L2 = the spec left a scientific decision open → the PLAN must decide it (Brain Phase 5 repair), and the drafted spec is retired
+        rd = Path(X["run_root"]) / X["run"]
+        jsave(rd / "phase5" / "plan_findings.json", {"x_id": xid, "block_id": card["block_id"], "written_at": card["written_at"],
+              "findings": [{"mode": f.get("mode"), "class": f.get("class"), "anchor": f.get("anchor"), "note": str(f.get("note"))[:400]} for f in findings]})
+        sp = rd / "spec" / f"{card['block_id']}.json"
+        if sp.exists(): sp.rename(rd / "spec" / f"{card['block_id']}.L2-{xid}.json")
+        card["plan_repair"] = str(rd / "phase5" / "plan_findings.json"); jsave(FAILURES / f"{xid}.json", card)
     md = [f"# Failure card {xid} — {card['block_id']} ({card['role']}) → {card['level']} / {card['outcome']}", "",
           f"- tests_premise: {card['tests_premise']}", f"- anti_claim: {card['anti_claim']}", f"- kill_condition: {card['kill_condition']}",
           f"- the plan's own failure_interpretation: {card['failure_interpretation']}", f"- numbers (verdict.json): {json.dumps(card['numbers'])}",

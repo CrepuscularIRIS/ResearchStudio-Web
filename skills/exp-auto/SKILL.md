@@ -27,3 +27,5 @@ description: "Auto mode — the main window drives the whole pipeline (Brain wor
    - `blocked` → 停，把 `state` 与 `note` 报给 owner。
    - `SUPPORTED` → 执行 `run` 里的 `report.py`，报告 `results_table.md` 路径，停；后续消融按 `evidence_plan.ablations` 的 priority 由 owner 决定是否继续。
 3. 每一步后在 `<run_root>/auto.log` 追加一行：时间、phase、state、做了什么（脚本输出的第一行）。
+
+9. L2 卡 = 计划欠账：导航器给的是同根 **plan repair**（Brain 只重跑 Phase 5），不是 retrigger；计划比卡新之后该块自动回到 `/exp-spec`。
