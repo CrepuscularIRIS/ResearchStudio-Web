@@ -32,9 +32,9 @@ RS 的核心原则保留：机制必须从文本可算；判改分席；便宜�
 | 1v | DR 校验 A：residue 引文三票（与 2.1+2.2 并行，不阻塞；结果喂 3.2） | 席 ×N 并行 | GLM | Read | 每条引文 verified/refuted |
 | 2.1+2.2 | 选 gap×模式 + 生成候选（同一上下文） | 席 | **Opus** | Read/Write | candidate.json、deferred_gaps[] |
 | 2g | 引用门（子模式 id 必须来自卡文件） | 脚本 | — | — | pass/fail |
-| 2.3 | 连贯门：干跑执行、独立构造 naive（= 推导席：T1 形式化 / T2 执行干跑 / T4 性质定级 / T5 naive） | 席（fresh） | **Astra**（gpt-6-astra；失败回退 Opus） | Read/Write/Bash 仅 python | blocking_findings.json |
+| 2.3 | 连贯门：干跑执行、独立构造 naive（= 推导席：T1 形式化 / T2 执行干跑 / T4 性质定级 / T5 naive） | 席（fresh） | **Opus**（失败回退 GLM；Astra 的额度在这一席死过两次） | Read/Write/Bash 仅 python | blocking_findings.json |
 | 3.1 | 碰撞双通道（signature@10mo、alias@48mo） | 脚本 ∥ 2.3 | — | — | collision_hits.json |
-| 3.2 | 五项审计 | 席（fresh） | **K3** | Read | verdict abandon/advance/revise |
+| 3.2 | 五项审计 | 席（fresh）×2 并行 | **K3**（裁决者）∥ **Sol**（第二审稿人，同提示词，自己的文件） | Read | verdict abandon/advance/revise（合并规则见 §10） |
 | 3.2b | 反驳复核（条件） | 席（fresh） | K3 | Read | — |
 | 3.3 | 补丁（只改审计点名字段） | 席 | Opus | Read/Write | candidate.json v2 |
 | ~~3.5~~ | ~~推导席~~ 并入 2.3（2026-09-07 深夜：不加席，换模型） | — | — | — | — |
@@ -43,7 +43,7 @@ RS 的核心原则保留：机制必须从文本可算；判改分席；便宜�
 | 4c | 组装 + method_view + 校验（derive、render 砍） | 脚本 | — | — | card.md |
 | 5 | evidence_plan | 席 | Opus 或 GLM | Read/Write | B2 契约给 Worker |
 
-计数：席 10 次（Opus 4、GLM 4–5 类、K3 1–2、Astra 1 = 2.3），脚本 6 次。3.2v 已砍（改为 K3 必须引全文原句）。与额度 100:20:5:1 相符。
+计数：席 10 次（Opus 5、GLM 4–5 类、K3 1–2、Sol 1 = 3.2 第二审稿人，与 K3 并行不加跳），脚本 6 次。3.2v 已砍（改为 K3 必须引全文原句）。与额度 100:20:5:1 相符。
 
 工具禁用原则：出品味的席不许搜不许跑（Opus）；判的席只许读（K3）；跑的席只许 python（2.3）；分类的席只许读写（0c）；Astra 只见冻结对象。Brain 主会话只跑脚本、派席、记状态，不写内容。
 
@@ -59,7 +59,7 @@ RS 的核心原则保留：机制必须从文本可算；判改分席；便宜�
 | 层 | 问题 | 读什么 | 谁 |
 |---|---|---|---|
 | 机制设计（2.2） | 改哪个算子、为什么有效 | substrate.md | Opus |
-| 推导（= 2.3 干跑） | 命题、条件、失效点（T1/T4/T5） | 候选 + substrate.md | Astra（回退 Opus） |
+| 推导（= 2.3 干跑） | 命题、条件、失效点（T1/T4/T5） | 候选 + substrate.md | Opus 新上下文（回退 GLM） |
 | 实现设计（Worker W0） | 改哪个文件、几行、跑多久 | 代码 | GLM |
 
 ## 5. ARFT / ASI-Bench / CCF 的插入方式
@@ -304,7 +304,7 @@ Workflow({scriptPath: '.claude/workflows/brain.workflow.js',
 
 ## 9g. Brain 最终席位配置表（由 workflow 的 SEATS 表生成，2026-09-07）
 
-模型路由：Opus = 作者，GLM = 工程，K3 = 对抗审计，Astra = 2.3 数值干跑/推导（gpt-6-astra，失败时同一席回退 Opus，记入 result.runs[].fallbacks）；claude-kimi 会话启动（官方 API 下 GLM/K3/Astra id 会被静默替换成会话模型）。runner = GLM / low。
+模型路由：Opus = 作者 + 2.3 干跑（新上下文，回退 GLM），GLM = 工程，K3 = 对抗审计，Sol（gpt-5.6-sol）= 3.2 的并行第二审稿人（K3 裁决；Sol 可迫使 revise 并追加 revision_targets，单独不能 abandon，`args.second_auditor_kills` 可改）；Phase 5 / Phase 6 = Opus（回退 GLM）；`args.seat_models` 可临时把任一席挪到别的模型（额度是当天的事实，不是设计）；claude-kimi 会话启动（官方 API 下 GLM/K3/Sol id 会被静默替换成会话模型）。runner = GLM / low。
 
 | 席位 | 步 | 模型 / effort | 工具类 | 逐字提示词 | 逐字引用 | 静态块 KB |
 |---|---|---|---|---|---|---|
@@ -312,8 +312,8 @@ Workflow({scriptPath: '.claude/workflows/brain.workflow.js',
 | ideate | 2.1+2.2 选 gap + 生成 | Opus / high | readwrite | ideate_select.txt, ideate_generate.txt | overview.md, companion-combos.md, overview.md | 75 |
 | generate | 2.2 重生成 | Opus / high | readwrite | ideate_generate.txt | overview.md | 32 |
 | cite_fix | 2g 引用修正 | Opus / medium | readwrite | — | overview.md | 5 |
-| coherence | 2.3 连贯干跑 = 推导 | Astra gpt-6-astra / high（回退 Opus） | exec | coherence_trace.txt | — | 17 |
-| audit | 3.2 审计 | K3 / high | readwrite | critique.txt | anti-patterns.md, strict-idea-review.md, problem-method-blueprint.md, arft_guide.md | 54 |
+| coherence | 2.3 连贯干跑 = 推导 | Opus / high（回退 GLM） | exec | coherence_trace.txt | — | 17 |
+| audit | 3.2 审计 | K3 / high ∥ Sol gpt-5.6-sol / high（第二审稿人，AUDIT_MERGE_PY 合并） | readwrite | critique.txt | anti-patterns.md, strict-idea-review.md, problem-method-blueprint.md, arft_guide.md | 54 |
 | recheck | 3.2b 复核 | K3 / medium | readwrite | refutation_recheck.txt | — | 5 |
 | revise | 3.3 补丁 | Opus / high | readwrite | revise.txt | — | 14 |
 | reaudit | 3.3b 证伪复审 | K3 / medium | readwrite | falsification_reaudit.txt | — | 6 |
@@ -324,9 +324,9 @@ Workflow({scriptPath: '.claude/workflows/brain.workflow.js',
 | writeup | do_not_generate / failed 写单 | GLM / low | readwrite | — | — | 2 |
 | tagging | Phase 0 打标 | GLM / low | readwrite | tagging_shard.md | pattern-summary-rubric.md, overview.md | 24 |
 | intake | Phase −1 仓库 intake | GLM / medium | repo | intake.md | intake-routing.md, intent-recognition.md, idea-intake.md, compute-env-contract.md, evidence-precheck.md | 31 |
-| evidence | Phase 5 证据合同 | Opus / high | readwrite | evidence_plan.md | evidence-design.md, result-templates.md, SKILL.md, SKILL.md | 28 |
+| evidence | Phase 5 证据合同 | Opus / high（回退 GLM） | readwrite | evidence_plan.md | evidence-design.md, result-templates.md, SKILL.md, SKILL.md | 28 |
 | rank | Rank | Opus / high | readwrite | rank.md | rubric.md, calibration.md, strict-idea-review.md, expert-panel.md, review-output-standards.md, venue-idea-adapters.md, literature-grounded-evolution.md | 40 |
-| spec | Phase 6 B1 spec | Opus / high | spec | spec.md | task.yaml, prompt_b1.md, how-scoring-works.md | 22 |
+| spec | Phase 6 B1 spec | Opus / high（回退 GLM） | spec | spec.md | task.yaml, prompt_b1.md, how-scoring-works.md | 22 |
 
 ## 10. 未决
 
@@ -334,9 +334,41 @@ Workflow({scriptPath: '.claude/workflows/brain.workflow.js',
 - Astra 通过 playwright 自动还是 owner 手工贴（先手工）。**2026-09-07 晚：推导纪律已按 ARIS formula-derivation 进 4b fill 席（同族）；跨族 Astra 推导席仍未建，建与不建是 owner 的决定。** **2026-09-07 深夜已决：不建独立席（再加一席 = 再加一跳）。Astra 以换模型的方式进 2.3——2.3 本就是推导席（T1 形式化 / T2 执行干跑 / T4 定级 / T5 naive），且在 3.2/3.3 修复环之前；gpt-6-astra 经 LiteLLM :4001，失败时同一席回退 Opus（`SEATS.coherence.fallback`，mock 变体 MOCK_ASTRA_FAIL）。每 run 串行 LLM 席仍为 12（intake → tagging → phase1 → ideate → coherence → audit → fill → derive → impl → evidence → spec → rank；revise 路径 +3），CCF/ARIS 两轮加的是引用与脚本检查，0 席。**
 - Phase −1 对无 anomalies 的新仓库是否补一轮诊断探针（先不做，退化为原版 RS）。
 - **失败卡回流（2026-09-07 深夜已接线）**：`args.negative_anchors`（实验侧 `failures/X-*.json`）只作为三席的上下文行进 Brain——Phase 1（实测事实，failure_interpretation 进 residue）、2.1+2.2（硬否决）、3.2（硬底线 abandon）；零新席、零新提示词文件。实验侧 `retrigger.py` 建 `<root>-n<round>` 并填此参数（worker 设计 §13.3）。
+- **Astra 额度（2026-09-07 更晚，owner）**：t1 第二次跑在 2.3 上三次 Astra 尝试各 20–26 分钟后额度耗尽；额度耗尽表现为 API 层无限重试，agent() 不返回，席位的 fallback 永远轮不到。决定：2.3 回 Opus（新上下文 ≠ 2.2 作者上下文；回退 GLM）；Sol（gpt-5.6-sol，同一 Codex OAuth 池）只放两个一次调用的形式席——Phase 5 证据合同、Phase 6 B1 spec（V8 就把 falsifier 和 spec 给 Sol），回退 Opus；新增 `args.seat_models` 覆盖，额度变化不用重生成。
+- **再改（2026-09-07 更晚，owner）**：Phase 5 / 6 回 Opus（回退 GLM）。Sol 放到 3.2 当**并行第二审稿人**：同一 critique 提示词、同一输入、自己的上下文，写 `phase3_critique/second_opinion.json`；`AUDIT_MERGE_PY`（确定性）合并进 K3 的文件——K3 abandon 即 abandon；K3 advance + Sol revise/abandon → revise 并追加 Sol 的 revision_targets（按 scope+field 去重，标 source=second_auditor）；两票都 advance 才 advance；Sol 单独不能杀（"a challenge flags, never kills"），`args.second_auditor_kills=true` 才允许。并行，不加串行跳；Sol 每 run 1 次。owner 原话："sol 实在不行就审查吧"。
 
 ## 11. 下一步
 
 1. 写 Phase −1 intake 提示词：RS 10 个 intake 字段逐个对应到仓库可读之物 + substrate 事实清单。
 2. 用当前仓库跑原版 RS 到 Phase 1，对照 anomalies.md 看 gap 是否命中。
 3. 搬资产（§8），写 `skills/brain/` 的导航循环。
+
+## 9h. 代码复审修的七处（2026-09-07 深夜；30 项测试全绿）
+
+| # | 问题 | 修法 |
+|---|---|---|
+| 1 | 长任务（phase0 / fulltext / collision）在席位重试或续跑时会被第二次 launch 到同一个输出文件 | `launchCmd`：pid 仍活着就复用（echo LAUNCHED），不重发 |
+| 2 | r2..rK 复制 r1 的 Phase 1 用 `cp -r r1/phase1 rd/`——目标目录已存在时会嵌套成 `rd/phase1/phase1`，导航器看不到产物 → 循环到 MAX_STEPS | `rm -rf rd/phase1 && cp -r r1/phase1 rd/phase1` |
+| 3 | Phase 1 在席位返回的瞬间就对 r2..rK 开放，此时产物还没过可读性校验；r1 若重试，r2 已复制了坏文件 | `phase1Ok` 挂在 lastSeat 上，verify 通过后才 `markPhase1(true)` |
+| 4 | 2.3 上一次未完成的尝试留下的 `blocking_findings.json` / `refined_candidate.json` 会被新一次 2.3 之后的 3.2 当成本次证据（t1 根上就有 Astra 留下的） | 跑 2.3 前 `rm -f` 这两个副产物 |
+| 5 | Phase 5 / 6 / rank / validate-repair 席不记 model 与 fallback | 统一 `rec()`，`result.runs[].fallbacks` 覆盖全部席 |
+| 6 | 续跑时 Phase 5 / 6 / rank 无条件重跑，覆盖已通过检查的好文件（与"已经发射过的不重做"矛盾） | 先跑 plan_check / spec_check / rank_check：通过 → 保留并跳过席；有 findings → 作为修复席的输入；文件不存在 → 新写。mock 变体 `MOCK_KEEP_PLAN` |
+| 7 | meta.phases 文案仍写 2.3=GLM、Phase 5/6=Opus 无回退 | 改为现状 |
+
+复审确认无误的：runner 退出哨兵、emit 解析取最后一块、validate 修复帽 2、collision 与 2.3 并行、STAGGER 轮转、ideateTurn 在失败路径也释放、AUDIT_MERGE 只改 verdict/revision_targets、quote 检查在合并之后运行。
+
+## 9i. ccf 第一次全程（phyagentos，2026-09-07）的轨迹审计与修复
+
+轨迹（wf_e3fb64，53 个 agent，席位合计 329 分钟）逐条核对 `agent-*.jsonl` 后的事实：
+
+| 事实 | 数据 | 修法 |
+|---|---|---|
+| **每个 agent 都以 effort=max 运行**——席位表写的 high/low 没有生效（jsonl 每条记录 `effort: max`；runner 也是 max） | 2.1+2.2 45 min / 34 万思考 token；2.3 两次各 20–24 min；Phase 6 53 min + 修复 50 min（27 万思考 token） | 根因是启动器：`~/bin/claude-kimi` 默认 `CLAUDE_CODE_EFFORT_LEVEL=max`、settings.json 同。改为 high（要 max 时 `CLAUDE_CODE_EFFORT_LEVEL=max claude-kimi`）。Workflow 的 per-agent effort 在 2.1.258 下不生效，已记入记忆 |
+| Sol 第二审稿人 7 次串行崩溃，每次 4 min，`<synthetic>: Prompt is too long`——它把 phase0 的 lit_table / 全文都读进上下文 | 28 min，最后 K3 单独裁决 | 第二审稿人只给紧凑输入（不含 phase0 语料文件，上下文行保留），且不重试（`{retry:false}`） |
+| Phase 6 席用 Glob 18 + Grep 21 + Read 35 自己爬仓库；spec_check 因引用尚不存在的网关文件而 BAD；修复提示词写的是"整文件重写"→ 又爬一遍 | 53 + 50 min | 运行前由 runner 生成 `spec/repo_map.txt` 作为输入；块自己创建的文件写 `function: NEW file`（spec_check 放行）；所有修复提示词改为 PATCH（只改点名项） |
+| 2.3 跑了两次 | 44 min | 不是 bug：两次都是 owner 中断（`[Request interrupted by user]`）后重发 |
+| 第一腿死于 2.3 的 merge 形状错误（patch 的 append_items 是 str），导航器重发同一条死命令 | 1h50m | 通用自愈：消费席位产物的确定性步骤失败一次 → 把失败原文喂回该席修一次 → 同一步骤再跑（cap 1；mock 变体 `MOCK_BASH_FAIL`） |
+| `brain_done(k=1)` 只看 spec/index.json，Brain 还在修复时导航器就切进 EXPERIMENT | 作废 1 次 precheck | Brain 结束写 `brain.done.json`；导航器先看新鲜锁：锁在、无 done 标记 → WAIT |
+| Grok 1.0.13 `--output-format json` 的 text 里是 5 份拼接的 JSON（前 4 份 findings 空，最后一份完整） | critic 两连败 → BLOCKED | `parse_findings` 拆分拼接文档，取最后一份有 findings 的；用那份原始输出做金标测试 |
+
+未变的：K3 审计 10–12 min、GLM 4.1.5 21 min（9.3 万 token 输出，无思考）属于模型侧成本。
