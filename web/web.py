@@ -310,7 +310,7 @@ def cmd_watch(a) -> int:
 def cmd_mark(a) -> int:
     """Record what the browser did. The skill drives the browser; the clock lives here."""
     root = Path(a.root).resolve()
-    mp = root / "web" / "manifest.json"
+    mp = root / "web" / ("candidate_manifest.json" if getattr(a, "candidate", False) else "manifest.json")
     man = _load(mp)
     if not man:
         raise SystemExit(f"no manifest at {mp} — seed first")
@@ -333,44 +333,35 @@ def cmd_mark(a) -> int:
 
 
 def cmd_patrol(a) -> int:
-    """One line per window: what it is doing and whether it is due. Exit 2 = something to do."""
+    """One line per window across BOTH batches (gaps + candidate reviews). Exit 2 = something to do."""
     root = Path(a.root).resolve()
-    man = _load(root / "web" / "manifest.json")
-    if not man:
-        print(f"NO-RUN  no manifest under {root/'web'} — nothing is in flight")
-        return 0
-    every = a.every or man.get("patrol_minutes", PATROL_MIN)
-    overdue = man.get("overdue_minutes", OVERDUE_MIN)
-    due = 0
-    print(f"patrol every {every} min, overdue at {overdue} min  ({root})")
-    for p in man["prompts"]:
-        pid, sent = p["id"], p.get("sent_at", "")
-        polls = p.get("polls") or []
-        if p.get("completed_at"):
-            print(f"  {pid}  DONE       completed {p['completed_at']}  {p.get('conversation_url') or 'NO URL RECORDED'}")
+    due_total = 0
+    for label, name in (("gap", "manifest.json"), ("candidate", "candidate_manifest.json")):
+        man = _load(root / "web" / name)
+        if not man or not man.get("prompts"):
             continue
-        if not sent:
-            print(f"  {pid}  NOT-SENT   {p['file']}")
-            due += 1
-            continue
-        age = age_min(sent) or 0.0
-        last = age_min((polls[-1] or {}).get("at", "")) if polls else None
-        # the first check is due one interval after the send, not immediately
-        since = age if last is None else last
-        state = "OVERDUE" if age > overdue else ("POLL-NOW" if since >= every else "WAIT")
-        if state != "WAIT":
-            due += 1
-        grew = ""
-        if len(polls) >= 2:
-            d = polls[-1]["len"] - polls[-2]["len"]
-            grew = f", grew {d:+d} chars since the previous poll" if d else ", unchanged since the previous poll"
-        nxt = "" if state != "WAIT" else f", next check in {every - since:.0f} min"
-        print(f"  {pid}  {state:9s} sent {age:.0f} min ago, {len(polls)} poll(s){grew}{nxt}")
-        if state == "OVERDUE":
-            print(f"        {age:.0f} min is past the budget — screenshot the window and report, do not keep waiting")
-    print(f"{due} window(s) need action" if due else "nothing due")
-    return 2 if due else 0
-
+        every = a.every or man.get("patrol_minutes", PATROL_MIN)
+        overdue = man.get("overdue_minutes", OVERDUE_MIN)
+        print(f"[{label} batch] patrol every {every} min, overdue at {overdue} min")
+        for p in man["prompts"]:
+            pid, sent = p["id"], p.get("sent_at", "")
+            polls = p.get("polls") or []
+            if p.get("completed_at"):
+                print(f"  {pid}  DONE       completed {p['completed_at']}  {p.get('conversation_url') or 'NO URL RECORDED'}")
+                continue
+            if not sent:
+                print(f"  {pid}  NOT-SENT   {p['file']}")
+                continue
+            age = age_min(sent)
+            last = polls[-1]["len"] if polls else None
+            state = ("OVERDUE" if age is not None and age > overdue else
+                     "POLL-NOW" if age is not None and age >= every else "WAIT")
+            print(f"  {pid}  {state:9s}  sent {age:5.0f} min ago  last capture {last if last is not None else '-'}  {p.get('conversation_url') or 'NO URL'}")
+            if state in ("POLL-NOW", "OVERDUE"):
+                due_total += 1
+    if not due_total:
+        print("nothing due on either batch")
+    return 2 if due_total else 0
 
 def cmd_collect(a) -> int:
     root = Path(a.root).resolve()
@@ -433,6 +424,7 @@ def main() -> int:
     m.add_argument("--url", default="", help="the conversation URL — the audit trail")
     m.add_argument("--poll", type=int, default=None, help="captured length at this poll")
     m.add_argument("--done", action="store_true", help="stamp completion (only with the end marker present)")
+    m.add_argument("--candidate", action="store_true", help="mark against the candidate-review batch")
     m.set_defaults(func=cmd_mark)
     pt = sub.add_parser("patrol", help="per-window state on the 30-minute clock; exit 2 when something is due")
     pt.add_argument("--root", required=True)

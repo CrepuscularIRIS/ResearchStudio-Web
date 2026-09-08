@@ -13,7 +13,7 @@ is an isolated agent; every artifact lives on disk.
 
     /rs <direction>
       ├─ local track   Workflow(rs.workflow.js)  → ONE persistent GLM main agent → Opus5 seats → idea cards (NO scoring inside)
-      ├─ web track     web.py watch → seed → chatgpt.com windows → patrol/capture (canvas = the card)
+      ├─ web track     Workflow(rsweb.workflow.js) → ONE GLM driver: watch/seed/send/patrol/capture (canvas = the card)
       └─ finish        consolidate all cards → Workflow(webjudge.workflow.js, {cards}) → Opus5∥Sol∥K3 ranking
 
 ## Phase A — pre-flight (once)
@@ -30,34 +30,21 @@ is an isolated agent; every artifact lives on disk.
    `.claude/workflows/ideaspark.workflow.js` with the same args (the seat-per-step build).
    Then keep working; the completion notification finds you.
 
-## Phase C — the web track (runs UNDER the local track)
+## Phase C — the web track (runs UNDER the local track; you only DISPATCH)
 
 The local chain's longest serial stretch (2.3 → 3.1 → 3.2) is 30–50 min; hosted answers take
-30–60 min. Send early, never wait.
+30–60 min. Send early, never wait. The browser work belongs to the rsweb DRIVER, not to you:
 
-Every ~30 minutes (and on each workflow notification) run BOTH:
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/web/web.py watch  --root RUN_ROOT     # exit 2 = something to send
-python3 ${CLAUDE_PLUGIN_ROOT}/web/web.py patrol --root RUN_ROOT     # exit 2 = a window is due/overdue
-```
-
-- `NEW-BOTTLENECK` → `web.py seed --root RUN_ROOT --from-run --n <min(5, gaps)>`. One window per
-  unaddressed gap, IdeaSpark trigger format.
-- `NEW-CANDIDATE` (the 2.2 dispatch, the valuable one) → `web.py seed --root RUN_ROOT
-  --from-candidate --n 5`. ONE WINDOW PER ITEM: the diagnosed structural bottleneck, then each
-  open gap — each with stakes, the residue map, and a six-section detailed card demanded
-  (diagnosis / evidence for / evidence against / binding constraint / attack sketch / verdict).
-  Plain prompts, `<<END OF IDEA REVIEW>>` marker.
-- Read every prompt file before sending — you are responsible for what goes into the account.
-- Send: `browser_tabs` one `chatgpt.com` window per prompt (≤5, staggered ~10 s), `browser_type`
-  with `submit: true`, CONFIRM the user turn, then `web.py mark --id NN --sent --url <url>`.
-- Patrol due windows: one `browser_evaluate` capture per the ideaspark-web skill's protocol;
-  **if the answer opened a Canvas, the canvas document IS the card** — capture its text, verify
-  the marker in it, save as `web/answers/NN.md` (gap batch) or `web/candidate_answers/NN.md`
-  (candidate batch). Then `web.py collect --root RUN_ROOT` and `web.py collect --root RUN_ROOT --candidate`.
-- A window OVERDUE (90 min) or stopped-early: screenshot, report, re-send once in a fresh window.
-- Follow the `ideaspark-web` skill's seven browser rules — they exist because each was violated once.
+- Right after Phase B, and again whenever the local track notifies a phase change, dispatch:
+  `Workflow(scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/rsweb.workflow.js, args {root: RUN_ROOT, mode: "send", web_py: "${CLAUDE_PLUGIN_ROOT}/web/web.py", n: 5})`
+  — ONE persistent GLM agent runs `web.py watch`, seeds both dispatch kinds (Phase-1 gaps;
+  2.2 bottleneck/gap items, one window per item, six-section card), opens the chatgpt.com
+  windows, sends, and records the conversation URLs.
+- Every ~30 minutes dispatch `mode: "patrol"` with the same args — the same one-agent driver
+  sweeps BOTH batches, captures due windows (canvas document = the card), saves answers, and
+  runs collect. It reports complete / unfinished / overdue per window.
+- You never touch the browser yourself unless a driver invocation fails; then read its note,
+  fix the cause (screenshot, rate limit, stopped-early), and re-dispatch the same mode.
 
 ## Phase D — the finish line (both tracks done)
 
