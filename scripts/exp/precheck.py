@@ -77,6 +77,8 @@ def main() -> int:
     spec_out = dict(spec); spec_out["_provenance"] = {"run_root": str(root), "run": run, "block": block, "spec_path": str(spec_path),
                                                      "spec_sha": sha, "plan_path": str(rd / "phase5" / "evidence_plan.json"), "precheck_at": now(), "repo": repo}
     jsave(bd / "spec.json", spec_out); (bd / "spec.sha").write_text(sha + "\n")
+    if not (rd / "phase2_coherence" / "phase2_coherence_output.json").exists():
+        warn.append("coherence gate (2.3) never completed for this candidate — a resume-cache replay skipped it (ccf 2026-09-07); zero-mechanism blocks may proceed, MECHANISM blocks must not launch before 2.3 runs on the final candidate")
     canary = canary_env_from_readme()
     (bd / "canary.env").write_text("".join(f"{k}={v}\n" for k, v in canary.items()))
     if not canary: warn.append("no canary line in instruments/README.md — the run launches WITHOUT the gate (recorded)")

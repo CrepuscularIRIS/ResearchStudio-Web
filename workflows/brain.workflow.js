@@ -5260,7 +5260,7 @@ function brainContext(kind, runId) {
 
 // ═══════════════════════════════════════════════════════════════ 6. shared stage: Phase -1 intake + Phase 0
 async function probeShared() {
-  const r = await sh('mkdir -p ' + shq(P0) + ' ' + shq(JOBS) + '; cd ' + shq(SHARED) + '; for f in queries.json intake.json substrate.md phase0/lit_results.json phase0/lit_table.md phase0/fulltext_cache.json; do [ -e "$f" ] && echo "HAS $f"; done; for j in phase0 fulltext; do [ -e "../.jobs/$j.pid" ] && kill -0 "$(cat ../.jobs/$j.pid)" 2>/dev/null && echo "ALIVE $j"; done; ls phase0/lit_rows_shard*.md 2>/dev/null | sed "s/^/SHARD /"; [ -e queries.json ] && { echo "QUERIES_JSON_BEGIN"; cat queries.json; echo; echo "QUERIES_JSON_END"; }; true', 'probe shared', { phase: 'Phase 0', timeout: 60000 })
+  const r = await sh('rm -f ' + shq(ROOT + '/brain.done.json') + '; mkdir -p ' + shq(P0) + ' ' + shq(JOBS) + '; cd ' + shq(SHARED) + '; for f in queries.json intake.json substrate.md phase0/lit_results.json phase0/lit_table.md phase0/fulltext_cache.json; do [ -e "$f" ] && echo "HAS $f"; done; for j in phase0 fulltext; do [ -e "../.jobs/$j.pid" ] && kill -0 "$(cat ../.jobs/$j.pid)" 2>/dev/null && echo "ALIVE $j"; done; ls phase0/lit_rows_shard*.md 2>/dev/null | sed "s/^/SHARD /"; [ -e queries.json ] && { echo "QUERIES_JSON_BEGIN"; cat queries.json; echo; echo "QUERIES_JSON_END"; }; true', 'probe shared', { phase: 'Phase 0', timeout: 60000 })
   const has = new Set([...r.out.matchAll(/^HAS (\S+)/gm)].map((m) => m[1]))
   const alive = new Set([...r.out.matchAll(/^ALIVE (\S+)/gm)].map((m) => m[1]))
   const shards = [...r.out.matchAll(/^SHARD (\S+)/gm)].map((m) => m[1])

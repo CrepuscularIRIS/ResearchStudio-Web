@@ -161,7 +161,7 @@ def _navigate(root: Path) -> dict:
     args = jload(root / "args.json", {}) or {}
     k = int(args.get("k") or 1)
     lk = brain_lock_state(root)
-    if lk["locked"] and lk["fresh"] and not (root / "brain.done.json").exists():      # a Brain is writing this root: never claim blocks under it (spec/index.json appears before the last repair)
+    if lk["locked"] and lk["fresh"]:      # a Brain is writing this root (a first run OR a plan repair): never claim blocks under it; the Brain deletes brain.done.json when it starts
         return emit("BRAIN", f"Brain in flight on this root since {lk['started_at']} (last write {lk['quiet_min']} min ago) — nothing to launch, nothing to claim", wait_s=900,
                     note=f"the running Workflow writes here; /loop 10m /exp-auto or wait; a lock quiet for {BRAIN_STALE_MIN} min counts as dead and the next call resumes from disk")
     if not brain_done(root, k):

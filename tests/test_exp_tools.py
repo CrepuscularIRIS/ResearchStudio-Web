@@ -225,8 +225,9 @@ def test_navigator_state_machine(tmp_path):
     (root / "r1" / "phase5" / "evidence_plan.bak").rename(root / "r1" / "phase5" / "evidence_plan.json")
     r = run(sys.executable, EXP / "brain_lock.py", root, "acquire", env=env); assert r.returncode == 0
     d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 900 and "nothing to claim" in d["state"], d
-    (root / "brain.done.json").write_text("{}"); d = _nav(root, env); assert d["phase"] == "EXPERIMENT" and d["skill"] == "exp-next", d
-    r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); (root / "r1" / "phase5" / "evidence_plan.json").rename(root / "r1" / "phase5" / "evidence_plan.bak")
+    (root / "brain.done.json").write_text("{}"); d = _nav(root, env); assert d["phase"] == "BRAIN" and d["wait_s"] == 900, d     # a fresh lock always means in flight (a plan repair runs with an old done marker present)
+    r = run(sys.executable, EXP / "brain_lock.py", root, "release", env=env); d = _nav(root, env); assert d["phase"] == "EXPERIMENT" and d["skill"] == "exp-next", d
+    (root / "r1" / "phase5" / "evidence_plan.json").rename(root / "r1" / "phase5" / "evidence_plan.bak")
     json.dump({"root": str(root), "repo": str(tmp_path / "repo"), "goal": "FROZEN test goal", "k": 1}, open(root / "args.json", "w"))
     (root / "r1" / "phase5" / "evidence_plan.bak").rename(root / "r1" / "phase5" / "evidence_plan.json")
     # no spec for B1 yet → the Worker drafts it (exp-spec) under the Brain's contract; packet + spec_check are scripts
