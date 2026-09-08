@@ -59,17 +59,32 @@ Seven rules, each of which exists because ignoring it produced a wrong answer be
    that silently kept the text is the most common failure and it looks like a slow answer.
 4. **Truncated capture means unfinished.** Treat the answer as complete only when ALL of these hold:
    the `<<END OF IDEA CARD>>` marker is present; no stop button and no `.result-streaming`; the
-   assistant turn carries a copy button; and `textContent.length` is unchanged across two polls at
-   least 20 s apart. Any one of them failing means keep waiting.
+   assistant turn carries a copy button; and `textContent.length` is unchanged since the previous
+   patrol. Any one of them failing means keep waiting — length unchanged with no marker is a window
+   that stopped early, not one that finished.
 5. **Read `textContent`, never `innerText`.** `innerText` reflects layout: it drops text clipped by
    overflow and reorders list markers, so a complete answer can read as a truncated one.
-6. **Poll on a budget, not in a spin.** Check every 45–60 s, up to 75 minutes per window. A run that
-   goes past that is stuck, not slow.
+6. **Patrol, do not watch.** A hosted answer takes 30–60 minutes, so the clock is 30 minutes, not
+   45 seconds: send, stamp the time, leave. First check one interval after the send, then every
+   interval, overdue at 90 minutes. `web.py patrol` owns that clock — it tells you which windows are
+   due and exits 2 when any is; never keep a window under continuous poll.
 7. **Screenshot before declaring anything dead.** If a window looks broken — no turn, empty body,
    an error banner — take `browser_take_screenshot` and read it before retrying or giving up. Say
    what the screenshot showed.
 
 ## Running it
+
+**0. Dispatch on a bottleneck, not on a finished run.** The local track writes its diagnosis at
+Phase 1, long before the cards exist — that is the moment to ask the web. Check it with:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py" watch --root <run_root>
+```
+
+`NEW-BOTTLENECK` (exit 2) prints the bottleneck and the exact seed command. `ALREADY-DISPATCHED`
+means this same diagnosis was already asked about — the check is a fingerprint over the bottleneck
+statement plus the gap list, so a re-run that keeps the diagnosis does not re-ask. `NO-BOTTLENECK`
+means Phase 1 routed to `do_not_generate` and there is nothing to ask.
 
 **1. Seed the prompts.** One per window, at most five:
 
@@ -93,10 +108,17 @@ you are responsible for what goes into someone else's chat window.
 per prompt, up to five. Stagger the sends by ~10 s. Record which tab index holds which prompt id;
 tab indices shift when a tab closes, so re-`list` before every `select`.
 
-**3. Send.** `browser_snapshot` to get the composer ref, `browser_type` the whole prompt with
-`submit: true`. Then rule 3: confirm the user turn exists before you start waiting.
+**3. Send, then stamp the clock.** `browser_snapshot` to get the composer ref, `browser_type` the
+whole prompt with `submit: true`. Confirm the user turn exists (rule 3), then record it — the
+conversation URL is the audit trail and it is the one thing you cannot reconstruct later:
 
-**4. Poll and capture.** Per window, per poll, one `browser_evaluate`:
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py" mark --root <run_root> --id NN --sent --url "<conversation url>"
+```
+
+**4. Patrol and capture.** `web.py patrol --root <run_root>` first — it says which windows are due
+(`POLL-NOW`), which are still inside the interval (`WAIT`), and which are past the budget
+(`OVERDUE`). For each due window, one `browser_evaluate`:
 
 ```js
 () => {
@@ -118,9 +140,15 @@ tab indices shift when a tab closes, so re-`list` before every `select`.
 ```
 
 For a long answer pass `filename` to `browser_evaluate` so the body goes to a file instead of
-through the conversation. Write the captured text verbatim to
-`<run_root>/web/answers/NN.md`, and the conversation URL into the manifest — that URL is the
-audit trail and it is the one thing you cannot reconstruct later.
+through the conversation. Write the captured text verbatim to `<run_root>/web/answers/NN.md`, then
+record the poll — and the completion only when the marker is actually there:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py" mark --root <run_root> --id NN --poll <captured length> [--done]
+```
+
+Two consecutive polls with the same length and no marker is not "finished": it is a window that
+stopped early. Treat it as truncated.
 
 **5. Collect.** `web.py collect --root <run_root>` writes `<run_root>/web/index.json`: per answer
 the prompt id, the URL, the length, whether the marker was present, and the first heading. It
@@ -130,6 +158,20 @@ refuses to mark an answer complete without the marker, so a half-captured window
 skill — `vendor/researchstudio/evaluation/idea_quality/SKILL.md`, three axes plus a blind pairwise.
 Judge the two tracks' cards against each other head to head; provenance is not evidence of quality
 and the pairwise track is the trustworthy signal.
+
+## The patrol loop
+
+One command answers "is there anything to do right now?" across a run:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py" watch  --root <run_root>   # exit 2 = a new bottleneck to send
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py" patrol --root <run_root>   # exit 2 = a window is due or overdue
+```
+
+Both are read-only and idempotent, so they are safe to run on a timer, from a fresh session, or by
+hand. Run them together every 30 minutes while a local run is in flight: `watch` catches the
+moment Phase 1 lands, `patrol` catches the windows that came back. When both exit 0 there is
+nothing to do and the right action is to stop, not to look again.
 
 ## When it goes wrong
 

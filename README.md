@@ -82,10 +82,28 @@ growing across two polls — **a truncated capture is an unfinished answer, neve
 Chats are persistent, one question per window, and the conversation URL goes in the manifest,
 because that URL is the audit trail.
 
-`scripts/web/web.py seed --from-run` is the point of running two tracks: it turns each gap the
-local run's Phase 1 left unaddressed into its own web question, and adds the audit's
-paper-pointed threat as a differentiation constraint. Run it whenever a local run reaches Phase 1,
-and again when it finishes.
+### The standing loop
+
+The two tracks are joined at the bottleneck, not at the finish line. The local run writes its
+diagnosis at Phase 1, long before any card exists — that is the moment to ask the web the same
+question. Two read-only commands say whether anything needs doing:
+
+```bash
+python3 scripts/web/web.py watch  --root <run_root>   # exit 2: a bottleneck nobody has asked about
+python3 scripts/web/web.py patrol --root <run_root>   # exit 2: a window is due, or overdue
+```
+
+`watch` fingerprints the bottleneck statement plus the gap list, so a re-run that keeps the same
+diagnosis does not re-ask. `seed --from-run` then turns each unaddressed gap into its own window
+and carries the audit's paper-pointed threat in as a differentiation constraint.
+
+`patrol` owns the clock: **30-minute interval, overdue at 90**, because a hosted answer takes
+30–60 minutes and watching one stream is a waste of a session. Send, stamp, leave, come back.
+`mark --sent/--poll/--done` is how the browser side writes to that clock; `--done` is only legal
+with the end marker actually present.
+
+Both commands are idempotent and read-only, so they are equally safe on a timer, from a fresh
+session, or by hand. When both exit 0 there is nothing to do.
 
 ## Requirements
 
