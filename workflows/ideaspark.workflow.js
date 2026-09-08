@@ -48,7 +48,9 @@ const PY = A.python || 'python3'
 const COMPUTE = A.compute || ''                                    // IDEASPARK_DEFAULT_COMPUTE — the standing compute profile Phase 1 judges feasibility against
 const USER_REFS = Array.isArray(A.user_refs) ? A.user_refs : []    // [{title, id?, raw_match?}] papers the direction names by title
 const MAX_STEPS = A.max_steps || 90
-const COVERAGE_JUDGES = A.coverage_judges === false ? [] : (A.coverage_judges || ['opus', 'sol', 'k3'])
+// 2026-09-08 realignment: upstream Phase 0.5 is ONE host pass, not a judge panel. Default []
+// (single seat); pass coverage_judges to opt back into the fanout panel.
+const COVERAGE_JUDGES = A.coverage_judges === false ? [] : (A.coverage_judges || [])
 const SCORE_JUDGES = A.score_judges === false ? [] : (A.score_judges || ['opus', 'sol', 'k3'])
 const COVERAGE_UNION_CAP = Math.max(1, parseInt(A.coverage_union_cap, 10) || 16)
 const JOBS = ROOT + '/.jobs'
@@ -2901,37 +2903,49 @@ For a comparison, output the absolute block for each idea, then:
 const SEATS = {
   queries:   { model: MODEL.glm,  effort: 'medium', tools: 'readwrite', tier: 'host', prompts: ['intent_recognition'], refs: ['intake_routing'] },
   partition: { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'own',  prompts: ['relevance_partition'], refs: [] },
-  tagging:   { model: MODEL.glm,  effort: 'low',    tools: 'readwrite', tier: 'fast', prompts: ['pattern_rubric'], refs: [] },
+  tagging:   { model: MODEL.opus,  effort: 'low',    tools: 'readwrite', tier: 'fast', prompts: ['pattern_rubric'], refs: [] },
   coverage:  { model: MODEL.opus, effort: 'high',   tools: 'web',       tier: 'own',  prompts: [], refs: [] },
   phase1:    { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['bottleneck_identify'], refs: [] },
   ideate:    { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['ideate_select', 'ideate_generate'], refs: ['patterns_overview', 'companion_combos', 'subpatterns_overview'] },
   generate:  { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['ideate_generate'], refs: ['subpatterns_overview'] },
-  cite_fix:  { model: MODEL.glm,  effort: 'medium', tools: 'readwrite', tier: 'host', prompts: [], refs: ['subpatterns_overview'] },
+  cite_fix:  { model: MODEL.opus,  effort: 'medium', tools: 'readwrite', tier: 'host', prompts: [], refs: ['subpatterns_overview'] },
   coherence: { model: MODEL.opus, effort: 'high',   tools: 'exec',      tier: 'large', prompts: ['coherence_trace'], refs: [] },
-  terms:     { model: MODEL.glm,  effort: 'low',    tools: 'readwrite', tier: 'host', prompts: [], refs: ['intent_recognition'] },
+  terms:     { model: MODEL.opus,  effort: 'low',    tools: 'readwrite', tier: 'host', prompts: [], refs: ['intent_recognition'] },
   audit:     { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['critique'], refs: ['anti_patterns'] },
   recheck:   { model: MODEL.opus, effort: 'high',   tools: 'exec',      tier: 'large', prompts: ['refutation_recheck'], refs: [] },
   revise:    { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['revise'], refs: [] },
   reaudit:   { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['falsification_reaudit'], refs: [] },
   fill:      { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['expand'], refs: [] },
-  derive:    { model: MODEL.glm,  effort: 'low',    tools: 'readwrite', tier: 'fast', prompts: ['derive_plain'], refs: [] },
+  derive:    { model: MODEL.opus,  effort: 'low',    tools: 'readwrite', tier: 'fast', prompts: ['derive_plain'], refs: [] },
   impl:      { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'large', prompts: ['implementability_audit'], refs: [] },
-  writeup:   { model: MODEL.glm,  effort: 'medium', tools: 'readwrite', tier: 'host', prompts: [], refs: [] },
+  writeup:   { model: MODEL.opus,  effort: 'medium', tools: 'readwrite', tier: 'host', prompts: [], refs: [] },
   judge:     { model: MODEL.opus, effort: 'high',   tools: 'readwrite', tier: 'own',  prompts: ['idea_quality'], refs: [] },
 }
 for (const [k, v] of Object.entries(A.seat_models || {})) {
-  if (SEATS[k] && MODEL[v]) SEATS[k].model = MODEL[v]
-  else throw new Error('args.seat_models: unknown seat or model key ' + k + ':' + v)
+  if (!SEATS[k]) throw new Error('args.seat_models: unknown seat key ' + k)
+  const m = (v && typeof v === 'object') ? v.model : v
+  if (m != null) {
+    if (!MODEL[m]) throw new Error('args.seat_models: unknown model key ' + k + ':' + m)
+    SEATS[k].model = MODEL[m]
+  }
+  if (v && typeof v === 'object' && v.effort) SEATS[k].effort = v.effort
 }
 const PHASE_OF = { queries: 'Phase 0', partition: 'Phase 0', tagging: 'Phase 0', coverage: 'Phase 0',
   fill: 'Phase 4', derive: 'Phase 4', impl: 'Phase 4', judge: 'Score' }
 const phaseOf = (kind) => PHASE_OF[kind] || 'Gauntlet'
 
+// 2026-09-08: measured on the live run — a k3 seat burned 16 min on TaskCreate/TaskUpdate
+// churn and another 35 min re-Writing its report every ~10 s. Seats get ONLY their working
+// tools; every auxiliary/tooling/communication tool is denied everywhere.
+const NO_AUX = ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskStop', 'Agent', 'SendMessage',
+  'ListAgents', 'AskUserQuestion', 'PushNotification', 'Monitor', 'CronCreate', 'CronList', 'CronDelete',
+  'ScheduleWakeup', 'EnterPlanMode', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree', 'Skill', 'SendFeedback',
+  'NotebookEdit', 'ToolSearch', 'TodoWrite']
 const DENY = {
-  readwrite: ['Bash', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],
-  exec:      ['Glob', 'Grep', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],
-  web:       ['Bash', 'Edit', 'Glob', 'Grep', 'WebFetch', 'NotebookEdit', 'ToolSearch'],
-  runner:    ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'NotebookEdit', 'ToolSearch'],
+  readwrite: ['Bash', 'Glob', 'Grep', 'WebFetch', 'WebSearch'].concat(NO_AUX),
+  exec:      ['Glob', 'Grep', 'WebFetch', 'WebSearch'].concat(NO_AUX),
+  web:       ['Bash', 'Edit', 'Glob', 'Grep', 'WebFetch'].concat(NO_AUX),
+  runner:    ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebFetch', 'WebSearch'].concat(NO_AUX),
 }
 const CLAMP = A.no_clamp ? {} : { exec: ['Bash(python3:*)'] }
 const TOOLS = {
@@ -2973,10 +2987,10 @@ function seatPrompt(kind, dyn) {
 const SEAT_SCHEMA = { type: 'object', properties: { ok: { type: 'boolean' }, written: { type: 'array', items: { type: 'string' } }, signal: { type: 'string' }, note: { type: 'string' } }, required: ['ok', 'written'] }
 const RUN_SCHEMA = { type: 'object', properties: { rc: { type: 'integer' }, out: { type: 'string' } }, required: ['rc', 'out'] }
 
-async function seat(kind, dyn, label, forceModel) {
+async function seat(kind, dyn, label, forceModel, forceEffort) {
   const s = SEATS[kind]
   const opts = { label: label.slice(0, 60), phase: dyn.phase || phaseOf(kind), schema: dyn.schema || SEAT_SCHEMA,
-    model: forceModel || s.model, effort: s.effort, disallowedTools: DENY[s.tools] }
+    model: forceModel || s.model, effort: forceEffort || s.effort, disallowedTools: DENY[s.tools] }
   if (CLAMP[s.tools]) opts.bashCommandClamp = CLAMP[s.tools]
   const prompt = seatPrompt(kind, dyn)
   let r = await agent(prompt, opts)
@@ -3318,7 +3332,10 @@ function decide(S, rd) {
     // Upstream: "Rows are per-paper independent, so for 40+ papers the tagging MAY be sharded across
     // 2-3 parallel fast-tier sub-agents (contiguous slices; assemble with lit_table_merge — it validates
     // 9-column shape, row count == paper count, and paper_id coverage)". Below 40 papers it stays one seat.
-    const nShards = S.p0.n_papers >= 40 ? Math.min(3, Math.max(2, Math.ceil(S.p0.n_papers / 40))) : 0
+    // 2026-09-08 realignment: 不切分 — ONE tagging call at any paper count. Upstream sharding is an
+    // optional wall-clock choice ("MAY be sharded"), and the merged run keeps the whole table in one
+    // context. The sharded path below remains reachable via args.tag_shards for an explicit opt-in.
+    const nShards = A.tag_shards || 0
     const common = 'Tag each paper with 1-3 of the 15 patterns + bottleneck + open_issue + retrieved_via per the rubric. EVERY paper you are given gets exactly one row — a paper that fits no pattern is tagged outside_taxonomy, never skipped or dropped.'
     if (!nShards) {
       return { t: 'seat', id: 'tagging', seat: 'tagging', state: 'Papers retrieved; lit_table.md not yet written.',
@@ -3434,7 +3451,8 @@ function decide(S, rd) {
         BANK.companion_combos.path + '  (inlined above — do not Read)',
         p0 + '/lit_table.md', slimLine,
         BANK.subpatterns_overview.path + '  (inlined above — do not Read; then open the picked ' + SUBPAT + '/C##.md cards)'].concat(cross),
-      output: p2s + ' then ' + p2g, notes: notes }
+      output: p2s + ' then ' + p2g,
+      notes: notes + ' THIS SEAT OWNS BOTH OUTPUT FILES: you are NOT done until ' + p2s + ' AND ' + p2g + ' are both written to disk. Run system prompt 1 of 2 fully (it writes the first file), then system prompt 2 of 2 fully (it writes the second), in this ONE context. Stopping after the first file is an incomplete seat.' }
   }
 
   // ---- citation gate (deterministic; already run inside the state probe) --------
@@ -3562,14 +3580,14 @@ function decide(S, rd) {
 
   // ---- abandon → information-gain retry ----------------------------------------
   if (verdict === 'abandon') {
-    const key = (l) => l[0] + ' ' + l[1]
+    const key = (l) => l[0] + '\u0000' + l[1]
     const seen = new Set()
     for (const a of S.attempts) for (const l of a.lessons) seen.add(key(l))
     const now = new Set(S.lessons_now.map(key))
-    if (auditNoncompliant) for (const t of S.p23.blocking_text) now.add('finding' + ' ' + t.slice(0, 40))
+    if (auditNoncompliant) for (const t of S.p23.blocking_text) now.add('finding' + '\u0000' + t.slice(0, 40))
     const fresh = [...now].filter((x) => !seen.has(x))
     const cyclesUsed = S.attempts.length + 1
-    const framingIndicted = [...now].some((x) => x.startsWith('threat ')) && [...seen].some((x) => x.startsWith('threat '))
+    const framingIndicted = [...now].some((x) => x.startsWith('threat\u0000')) && [...seen].some((x) => x.startsWith('threat\u0000'))
     const nextIdx = S.attempts.length ? (parseInt(S.attempts[S.attempts.length - 1].name.slice(8), 10) + 1) : 1
     const archDir = d + '/attempt_' + nextIdx
     const candDirs = ['phase2_select', 'phase2_generate', 'phase2_coherence', 'phase3_collision', 'phase3_critique', 'phase3_revise']
@@ -3980,14 +3998,16 @@ if (done.length && SCORE_JUDGES.length) {
   await shOk('mkdir -p ' + shq(dir), 'mkdir score', { phase: 'Score', timeout: 60000 })
   const cards = done.map((r) => ({ run: r.id, file: r.dir + '/phase4/idea.std.en.md' }))
   const pairwise = cards.length >= 2
+  const K3_CLAMP = ' SEAT DISCIPLINE (binding): you have NO task-tracking tools and NO retry loop. Read each card ONCE, decide, then produce exactly TWO Writes — the .md report (body ≤ 350 words; the reasoning happened in your thinking, not in report length) and the .json echo. A second Write to either path, any todo list, or any re-reading loop is a contract violation that voids the seat.'
   const rs = await parallel(SCORE_JUDGES.map((m) => () => seat('judge', {
     rd: ROOT, step: 'Score ' + cards.length + ' idea card(s) — judge ' + m, phase: 'Score',
     inputs: cards.map((c) => c.file + '  (idea ' + c.run + ': Title / Motivation / Method)'),
     output: dir + '/' + m + '.md then ' + dir + '/' + m + '.json',
     notes: 'Run the absolute track for every idea' + (pairwise ? ', then the pairwise track over the two ideas (pairwise is the trustworthy signal)' : '') +
       '. Write the report exactly in the system prompt\'s output format to the .md path. Then write a machine-readable echo of the SAME judgments to the .json path — no new judgments, just the numbers you already justified: {"ideas": [{"run": "<the idea id from INPUT>", "A": 1-5, "B": 1-5, "C": 1-5, "overall": 0-100, "verdict": "strong|borderline|weak"}]' +
-      (pairwise ? ', "pairwise": {"winner": "<run id>|tie", "why": "one line"}' : '') + '}. Judge blind to source: the run id, the input order and the length or polish of a card are not evidence of quality. Routing signal: the overall score per idea.',
-  }, 'score: ' + m, MODEL[m])))
+      (pairwise ? ', "pairwise": {"winner": "<run id>|tie", "why": "one line"}' : '') + '}. Judge blind to source: the run id, the input order and the length or polish of a card are not evidence of quality. Routing signal: the overall score per idea.' +
+      (MODEL[m] === MODEL.k3 ? K3_CLAMP : ''),
+  }, 'score: ' + m, MODEL[m], MODEL[m] === MODEL.k3 ? 'medium' : undefined)))
   const okJudges = SCORE_JUDGES.filter((m, j) => rs[j] && rs[j].ok)
   if (okJudges.length) {
     const agg = await sh(PY + ' - ' + shq(dir + '/aggregate.json') + ' ' + okJudges.map((m) => shq(dir + '/' + m + '.json')).join(' ') + ' <<\'PYEOF\'\n' + SCORE_PY + '\nPYEOF', 'score aggregate', { phase: 'Score', timeout: 120000 })
