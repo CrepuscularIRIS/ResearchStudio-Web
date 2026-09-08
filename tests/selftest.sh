@@ -25,5 +25,32 @@ assert pathlib.Path(a["rs_home"], "skills/idea_spark/scripts/run.py").exists(), 
 assert pathlib.Path(a["root"]).name == "selftest", a["root"]
 print("  install ok:", a["root"])
 PY
+
+echo "== web track"
+mkdir -p "$T/r/phase1" "$T/r/web/answers"
+python3 - "$T/r" <<'PY'
+import json, pathlib, sys
+r = pathlib.Path(sys.argv[1])
+(r / "phase1/phase1_output.json").write_text(json.dumps({
+    "intake": {"domain": "embodied agents", "contribution_type": "method", "compute": "8xH100"},
+    "bottleneck_statement": "retrieval is scored by similarity, not by effect on the next tool call",
+    "what_phase_0_did_not_address": ["no method conditions retrieval on downstream tool success.",
+                                     "no benchmark isolates retrieval error from planning error."]}))
+PY
+python3 "$P/scripts/web/web.py" seed --root "$T/r" --from-run --n 2 > /dev/null
+grep -q '^@ResearchStudio IdeaSpark Use IdeaSpark\.$' "$T/r/web/prompts/01.txt"
+grep -q 'End your answer with the single line <<END OF IDEA CARD>>' "$T/r/web/prompts/01.txt"
+printf 'cut off mid-sen' > "$T/r/web/answers/01.md"
+printf 'whole card\n\n<<END OF IDEA CARD>>\n' > "$T/r/web/answers/02.md"
+if python3 "$P/scripts/web/web.py" collect --root "$T/r" > /dev/null; then
+  echo "  FAIL: collect accepted a capture with no end marker"; exit 1
+fi
+python3 - "$T/r/web/index.json" <<'PY'
+import json, sys, pathlib
+d = json.loads(pathlib.Path(sys.argv[1]).read_text())
+a = {x["id"]: x for x in d["answers"]}
+assert a["01"]["complete"] is False and a["02"]["complete"] is True, d
+print("  web ok: truncated capture rejected, complete one accepted")
+PY
 rm -rf "$T"
 echo "selftest ok"

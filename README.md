@@ -1,12 +1,20 @@
 # research-harness
 
-One workflow. It runs Microsoft ResearchStudio's `idea_spark` skill end to end inside Claude
-Code — a research direction in, one reviewer-defensible idea card out — as a 1:1 replica of
-the upstream pipeline rather than a re-interpretation of it.
+Microsoft ResearchStudio's `idea_spark` skill, on two tracks. A research direction in, a
+reviewer-defensible idea card out.
+
+- **Local** — one Claude Code workflow, a 1:1 replica of the upstream pipeline rather than a
+  re-interpretation of it. Every gate runs; hours; reproducible and auditable.
+- **Web** — a skill that asks the hosted IdeaSpark the same question on `chatgpt.com` through the
+  playwright extension, up to five conversations in parallel. 30–60 minutes, and far more
+  literature behind the answer.
+
+Neither replaces the other, and the same judge scores both.
 
 ```
 /research-harness:init  <slug> "<one sentence: the research direction>"
-/research-harness:spark <slug>
+/research-harness:spark <slug>              # local track — the workflow
+/research-harness:web   <slug> --from-run   # web track — one window per Phase 1 gap
 ```
 
 Three cards land in `ideaspark_run/<slug>/phase4/`: plain Chinese, plain English, and the
@@ -52,13 +60,43 @@ Pattern tagging fans out to 2–3 parallel shards above 40 papers. That is not a
 upstream sanctions it explicitly and its own validating merger rejects the whole set if a row
 is malformed, the row count is wrong, or a paper is missing.
 
+## The web track
+
+`skills/ideaspark-web/` drives `chatgpt.com`. The prompt opens with the trigger line
+`@ResearchStudio IdeaSpark Use IdeaSpark.` followed by the intake, one field per line, and ends
+with a marker line the skill adds:
+
+```
+@ResearchStudio IdeaSpark Use IdeaSpark.
+Target system: PhyAgentOS.
+Research direction: long-horizon agents suffer from context growth and unreliable memory
+  retrieval. I want a method that makes memory selection causally relevant to future tool decisions.
+Contribution type: method.
+Compute budget: 8×H100.
+End your answer with the single line <<END OF IDEA CARD>> and nothing after it.
+```
+
+The marker is what turns "is it finished?" into a fact. An answer counts as captured only when the
+marker is present, nothing is streaming, the turn carries its copy button, and the text stopped
+growing across two polls — **a truncated capture is an unfinished answer, never a short one**.
+Chats are persistent, one question per window, and the conversation URL goes in the manifest,
+because that URL is the audit trail.
+
+`scripts/web/web.py seed --from-run` is the point of running two tracks: it turns each gap the
+local run's Phase 1 left unaddressed into its own web question, and adds the audit's
+paper-pointed threat as a differentiation constraint. Run it whenever a local run reaches Phase 1,
+and again when it finishes.
+
 ## Requirements
 
-- A `claude-kimi` session. The seat table pins model ids (`claude-opus-5`, `glm-5.3[1m]`,
+- For the local track, a `claude-kimi` session. The seat table pins model ids (`claude-opus-5`, `glm-5.3[1m]`,
   `k3-256k`, `gpt-5.6-sol`) that resolve on a local LiteLLM route. On the official Anthropic
   API those ids do not exist and the session model is served instead, silently.
 - `python3` with `feedparser openreview-py beautifulsoup4 pymupdf` (upstream's connectors and
   full-text fetch). Optional: `xelatex` or `tectonic` for the PDF cards.
+- For the web track, the `playwright-extension` MCP connected to a browser already signed in to
+  ChatGPT. The skill never signs in, never clicks through account dialogs, and never pastes local
+  file contents into the chat.
 - Connector credentials: copy `vendor/researchstudio/.env.template` to `.env` **beside it** and
   fill in the OpenReview user/password and a Semantic Scholar key. `run.py` walks up from the
   skill directory and stops at the first `.env` it finds, so keep them in one file — a second
@@ -67,11 +105,13 @@ is malformed, the row count is wrong, or a paper is missing.
 ## Layout
 
 ```
-workflows/ideaspark.workflow.js     the workflow (generated — edit the source, not this)
+workflows/ideaspark.workflow.js     the local track (generated — edit the source, not this)
 scripts/ideaspark_src/              logic + generator; `python3 gen.py` rebuilds the workflow
+skills/ideaspark-web/               the web track: trigger format, browser protocol, completion rule
+scripts/web/web.py                  seeds the web prompts, indexes the captures
 vendor/researchstudio/              upstream idea_spark + idea_quality, MIT, unmodified
 tests/                              differential test, fixtures, selftest.sh
-commands/                           /init and /spark
+commands/                           /init, /spark, /web
 ```
 
 `tests/selftest.sh` runs everything: generator round-trip, byte-identical prompts, the
