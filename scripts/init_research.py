@@ -38,6 +38,25 @@ def main() -> int:
     wf_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(PLUGIN / "workflows" / "ideaspark.workflow.js", wf_dir / "ideaspark.workflow.js")
 
+    # the web track: its skill and its deterministic half, plus the slash commands that fire both
+    # tracks. Installed project-locally with the plugin-root placeholder resolved, so the commands
+    # work whether or not this plugin is enabled as a plugin.
+    sk = project / ".claude" / "skills" / "ideaspark-web"
+    sk.mkdir(parents=True, exist_ok=True)
+    shutil.copy(PLUGIN / "skills" / "ideaspark-web" / "SKILL.md", sk / "SKILL.md")
+    web = project / ".research" / "web"
+    web.mkdir(parents=True, exist_ok=True)
+    shutil.copy(PLUGIN / "scripts" / "web" / "web.py", web / "web.py")
+    (web / "web.py").chmod(0o755)
+    cmd_dir = project / ".claude" / "commands"
+    cmd_dir.mkdir(parents=True, exist_ok=True)
+    for c in sorted((PLUGIN / "commands").glob("*.md")):
+        if c.stem == "init":
+            continue                      # installing is what just happened; the copy would be circular
+        (cmd_dir / c.name).write_text(
+            c.read_text(encoding="utf-8").replace('"${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py"', ".research/web/web.py"),
+            encoding="utf-8")
+
     run_root = project / "ideaspark_run" / a.slug
     args_path = run_root / "args.json"
     run_root.mkdir(parents=True, exist_ok=True)
@@ -54,6 +73,8 @@ def main() -> int:
 
     env = VENDOR / ".env"
     print(f"workflow  → {wf_dir / 'ideaspark.workflow.js'}")
+    print(f"skill     → {sk / 'SKILL.md'} (+ {web / 'web.py'})")
+    print(f"commands  → {cmd_dir}: " + ", ".join("/" + c.stem for c in sorted(cmd_dir.glob("*.md"))))
     print(f"args.json → {args_path}" + ("" if written else "  (kept — already existed)"))
     print(f"upstream  → {VENDOR}")
     if not env.exists():

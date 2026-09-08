@@ -12,10 +12,16 @@ reviewer-defensible idea card out.
 Neither replaces the other, and the same judge scores both.
 
 ```
-/research-harness:init  <slug> "<one sentence: the research direction>"
-/research-harness:spark <slug>              # local track — the workflow
-/research-harness:web   <slug> --from-run   # web track — one window per Phase 1 gap
+/init   <slug> "<one sentence: the research direction>"   # sets the project up
+/dual   <slug>            # ← the dual-track trigger: local workflow, then web windows on the bottleneck
+/patrol                   # one sweep over every run root: what needs sending, checking, or is overdue
+/spark  <slug>            # local track only
+/web    <slug>            # web track only
 ```
+
+`init` installs the workflow, the web-track skill, `web.py`, **and these commands** into the
+project's own `.claude/`, with the plugin-root placeholder resolved — so they work whether or not
+this plugin is enabled as a plugin. Everything is project-local; nothing lands in `~/.claude`.
 
 Three cards land in `ideaspark_run/<slug>/phase4/`: plain Chinese, plain English, and the
 reviewer version. Or `do_not_generate.md` when the direction cannot be grounded, or
@@ -129,7 +135,7 @@ skills/ideaspark-web/               the web track: trigger format, browser proto
 scripts/web/web.py                  seeds the web prompts, indexes the captures
 vendor/researchstudio/              upstream idea_spark + idea_quality, MIT, unmodified
 tests/                              differential test, fixtures, selftest.sh
-commands/                           /init, /spark, /web
+commands/                           /init, /dual, /patrol, /spark, /web
 ```
 
 `tests/selftest.sh` runs everything: generator round-trip, byte-identical prompts, the
