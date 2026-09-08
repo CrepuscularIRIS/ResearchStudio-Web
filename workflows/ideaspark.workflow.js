@@ -51,7 +51,11 @@ const MAX_STEPS = A.max_steps || 90
 // 2026-09-08 realignment: upstream Phase 0.5 is ONE host pass, not a judge panel. Default []
 // (single seat); pass coverage_judges to opt back into the fanout panel.
 const COVERAGE_JUDGES = A.coverage_judges === false ? [] : (A.coverage_judges || [])
-const SCORE_JUDGES = A.score_judges === false ? [] : (A.score_judges || ['opus', 'sol', 'k3'])
+// 2026-09-08: the local track ENDS AT THE CARDS — idea quality no longer intervenes here.
+// The three judges run AFTER the lite track and the local track are both done and the main
+// agent has consolidated the cards (webjudge.workflow.js, args.cards = the consolidated list).
+// Pass score_judges to opt back into the in-workflow Score phase.
+const SCORE_JUDGES = A.score_judges === false ? [] : (A.score_judges || [])
 const COVERAGE_UNION_CAP = Math.max(1, parseInt(A.coverage_union_cap, 10) || 16)
 const JOBS = ROOT + '/.jobs'
 const RUN_IDS = Array.from({ length: K }, (_, i) => 'r' + (i + 1))

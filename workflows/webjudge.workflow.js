@@ -4,17 +4,19 @@ export const meta = {
   phases: [{ title: 'Judge' }, { title: 'Aggregate' }],
 }
 
-// args: { root: <ideaspark run dir>, judges?: ['opus','sol','k3'], models?: {k3:'k3-256k',...} }
-// Reads web/candidate_answers/*.md (the captured web windows, one bottleneck/gap item each),
-// fires the three judges in parallel (the ONLY parallel step), aggregates by median, and
-// returns which bottleneck is most worth a method paper attacking.
+// args: { cards?: [absolute .md paths], root?: <ideaspark run dir>, judges?: ['opus','sol','k3'], models?: {...} }
+// The FINAL idea-quality panel, dispatched by the main agent AFTER the lite track and the local
+// track are both complete and the cards are consolidated (local idea cards + downloaded web
+// canvas cards). cards= judges exactly those files; otherwise root='s web/candidate_answers/*.md.
+// Three judges in parallel (the ONLY parallel step), median + Borda aggregate.
 
 const A = args || {}
-const ROOT = A.root
-if (!ROOT) throw new Error('args.root is required: the ideaspark run dir holding web/candidate_answers/')
+const CARDS = (A.cards && A.cards.length) ? A.cards : null
+const ROOT = A.root || null
+if (!CARDS && !ROOT) throw new Error('pass args.cards (the consolidated card paths) or args.root (its web/candidate_answers/ is judged)')
 const JUDGES = A.judges || ['opus', 'sol', 'k3']
 const MODEL = Object.assign({ opus: 'claude-opus-5', glm: 'glm-5.3[1m]', k3: 'k3-256k', sol: 'gpt-5.6-sol' }, A.models || {})
-const DIR = ROOT.replace(/\/+$/, '') + '/web/candidate_answers'
+const DIR = CARDS ? null : ROOT.replace(/\/+$/, '') + '/web/candidate_answers'
 
 const NO_AUX = ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskStop', 'Agent', 'SendMessage',
   'ListAgents', 'AskUserQuestion', 'PushNotification', 'Monitor', 'CronCreate', 'CronList', 'CronDelete',
@@ -39,16 +41,19 @@ const K3_CLAMP = ' SEAT DISCIPLINE (binding): you have NO task-tracking tools an
 
 phase('Judge')
 const pairs = (await parallel(JUDGES.map((m) => () => agent(
-  'You are one of three independent judges of web-track bottleneck-analysis cards. Each card is a '
-  + 'detailed, mechanism-level analysis of ONE structural bottleneck or open gap, produced by a hosted '
-  + 'model over a grounded literature run.\n\n'
-  + 'Use Glob on ' + DIR + '/*.md to enumerate the cards, Read each one, and score EVERY card:\n'
-  + '- A (1-5): novelty and depth of the mechanism-level diagnosis — structural insight, not survey\n'
+  'You are one of three independent judges of research cards from a two-track run: method IDEA '
+  + 'cards from the audited local pipeline, and bottleneck-ANALYSIS cards from the web track (each a '
+  + 'detailed mechanism-level analysis of one structural bottleneck or open gap).\n\n'
+  + (CARDS
+      ? 'Read EVERY one of these card files (paths, verbatim):\n' + CARDS.map((c) => '- ' + c).join('\n') + '\n'
+      : 'Use Glob on ' + DIR + '/*.md to enumerate the cards, Read each one,\n')
+  + 'and score EVERY card:\n'
+  + '- A (1-5): novelty and depth — a structural mechanism insight, not a survey or a restatement\n'
   + '- B (1-5): validity — is the causal chain and its evidence sound; counter-evidence honestly weighed\n'
   + '- C (1-5): significance — do the stakes justify a method paper attacking this\n'
   + '- overall (0-100) and verdict: strong | borderline | weak, with a ONE-line why\n'
-  + 'Then "ranking": the card FILES ordered by which bottleneck is most worth a method paper attacking, '
-  + 'best first.\n'
+  + 'Then "ranking": the card FILES ordered by which line of attack is most worth committing a method '
+  + 'paper to, best first.\n'
   + 'Judge blind to file name, order, length and polish — they are not evidence of quality. An honest '
   + 'weak verdict is worth more than a generous one.'
   + (MODEL[m] === MODEL.k3 ? K3_CLAMP : ''),
@@ -75,7 +80,7 @@ const ranking = Object.entries(borda).sort((a, b) => b[1] - a[1]).map(([f]) => f
 log('webjudge: ' + files.length + ' card(s), ' + ok.length + '/' + JUDGES.length + ' judges; top = ' + (ranking[0] || agg[0]?.file || 'none'))
 
 return {
-  root: ROOT, dir: DIR, judges_ok: ok.length, judges_total: JUDGES.length,
+  root: ROOT || null, cards: CARDS, dir: DIR, judges_ok: ok.length, judges_total: JUDGES.length,
   aggregate: agg, ranking_borda: ranking,
   per_judge: pairs.map((p) => ({ judge: p.judge, ranking: p.r.ranking, note: (p.r.note || '').slice(0, 300) })),
 }
