@@ -1,7 +1,7 @@
 {
   "name": "research-harness",
-  "version": "0.8.1",
-  "description": "ResearchStudio idea_spark on two tracks. Local: one Claude Code workflow replicating the upstream pipeline 1:1 \u2014 phase graph ported to JS, all 11 system prompts packed byte-for-byte, upstream's run.py for every deterministic step, and a differential test asserting the same next step as upstream's navigator on 52 fixtures. Web: a skill that drives the hosted IdeaSpark on chatgpt.com through the playwright extension, 1-5 conversations in parallel, seeded from a direction or from a finished local run, captured only when provably complete. Same judge scores both.",
+  "version": "0.8.0",
+  "description": "ResearchStudio idea_spark on two native-tool surfaces. Claude Code keeps the isolated-seat workflow and adds a host adapter that uses native Web/GitHub retrieval for Phase 0 and Phase 3.1 with an upstream Python-connector fallback. OpenAI ships one prompt-preserving Skill for ChatGPT and Codex with GitHub, web, and Files retrieval plus deterministic Python state/validation helpers.",
   "author": {
     "name": "CrepuscularIRIS"
   },
@@ -13,7 +13,11 @@
     "idea-spark",
     "falsification",
     "workflow",
-    "playwright",
-    "claude-code"
+    "native-retrieval",
+    "github",
+    "claude-code",
+    "openai",
+    "chatgpt",
+    "codex"
   ]
 }

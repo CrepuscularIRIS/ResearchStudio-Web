@@ -7,7 +7,7 @@
     {
       "name": "research-harness",
       "source": ".",
-      "description": "ResearchStudio idea_spark on two tracks: a 1:1 local workflow, and the hosted skill driven on chatgpt.com in parallel windows."
+      "description": "ResearchStudio idea_spark with a Claude Code isolated-seat workflow plus native Web/GitHub retrieval, and a prompt-preserving OpenAI Skill for ChatGPT/Codex."
     }
   ]
 }

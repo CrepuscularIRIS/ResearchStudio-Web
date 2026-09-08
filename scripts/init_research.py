@@ -1,18 +1,8 @@
 #!/usr/bin/env python3
-"""init_research.py [--slug <topic>] [--dir <project>] — set up one idea-spark run.
+"""init_research.py [--slug <topic>] [--dir <project>] — set up one IdeaSpark run.
 
-Installs the workflow into the project and writes the run's args.json, pointed at the
-ResearchStudio checkout this plugin vendors. Nothing else is copied: the pipeline itself
-lives in the vendored upstream tree, which is never edited.
-
-Layout produced (upstream's own run-dir convention — one run, one directory):
-
-    <project>/.claude/workflows/ideaspark.workflow.js
-    <project>/ideaspark_run/<slug>/args.json        <- fill in `direction`, then launch
-
-The run directory is NOT created here: `run.py phase0` mkdir -p's its own --out, and the
-workflow treats a missing directory as a fresh run. args.json is written once and never
-overwritten.
+Installs the unchanged isolated-seat workflow plus the Claude native-retrieval host adapter,
+and writes the run's args.json pointed at the vendored ResearchStudio checkout.
 """
 from __future__ import annotations
 
@@ -31,6 +21,12 @@ def main() -> int:
     ap.add_argument("--dir", default="", help="project root (default: the current directory)")
     ap.add_argument("--direction", default="", help="the research direction, one sentence")
     ap.add_argument("--compute", default="", help="standing compute profile, e.g. '2x4090 48GB, ~30 GPU-days'")
+    ap.add_argument(
+        "--retrieval-mode",
+        choices=("native", "upstream"),
+        default="native",
+        help="native Web/GitHub retrieval (default) or vendored ResearchStudio Python connectors",
+    )
     a = ap.parse_args()
 
     project = Path(a.dir).resolve() if a.dir else Path.cwd().resolve()
@@ -38,51 +34,60 @@ def main() -> int:
     wf_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(PLUGIN / "workflows" / "ideaspark.workflow.js", wf_dir / "ideaspark.workflow.js")
 
-    # the web track: its skill and its deterministic half, plus the slash commands that fire both
-    # tracks. Installed project-locally with the plugin-root placeholder resolved, so the commands
-    # work whether or not this plugin is enabled as a plugin.
-    sk = project / ".claude" / "skills" / "ideaspark-web"
-    sk.mkdir(parents=True, exist_ok=True)
-    shutil.copy(PLUGIN / "skills" / "ideaspark-web" / "SKILL.md", sk / "SKILL.md")
-    web = project / ".research" / "web"
-    web.mkdir(parents=True, exist_ok=True)
-    shutil.copy(PLUGIN / "scripts" / "web" / "web.py", web / "web.py")
-    (web / "web.py").chmod(0o755)
+    # Install only the Claude native host adapter. The former Playwright web track is gone.
+    skill_src = PLUGIN / "skills" / "ideaspark-native" / "SKILL.md"
+    skill_dst = project / ".claude" / "skills" / "ideaspark-native"
+    skill_dst.mkdir(parents=True, exist_ok=True)
+    shutil.copy(skill_src, skill_dst / "SKILL.md")
+
     cmd_dir = project / ".claude" / "commands"
     cmd_dir.mkdir(parents=True, exist_ok=True)
     for c in sorted((PLUGIN / "commands").glob("*.md")):
         if c.stem == "init":
-            continue                      # installing is what just happened; the copy would be circular
-        (cmd_dir / c.name).write_text(
-            c.read_text(encoding="utf-8").replace('"${CLAUDE_PLUGIN_ROOT}/scripts/web/web.py"', ".research/web/web.py"),
-            encoding="utf-8")
+            continue
+        shutil.copy(c, cmd_dir / c.name)
 
     run_root = project / "ideaspark_run" / a.slug
     args_path = run_root / "args.json"
     run_root.mkdir(parents=True, exist_ok=True)
     written = False
     if not args_path.exists():
-        args_path.write_text(json.dumps({
-            "root": str(run_root),
-            "direction": a.direction or "<one sentence: the research direction to spark an idea in>",
-            "rs_home": str(VENDOR),
-            "compute": a.compute or "",
-            "k": 1,
-        }, indent=2) + "\n", encoding="utf-8")
+        args_path.write_text(
+            json.dumps(
+                {
+                    "root": str(run_root),
+                    "direction": a.direction or "<one sentence: the research direction to spark an idea in>",
+                    "rs_home": str(VENDOR),
+                    "compute": a.compute or "",
+                    "retrieval_mode": "native" if a.retrieval_mode == "native" else "upstream",
+                    "k": 1,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         written = True
 
-    env = VENDOR / ".env"
-    print(f"workflow  → {wf_dir / 'ideaspark.workflow.js'}")
-    print(f"skill     → {sk / 'SKILL.md'} (+ {web / 'web.py'})")
-    print(f"commands  → {cmd_dir}: " + ", ".join("/" + c.stem for c in sorted(cmd_dir.glob("*.md"))))
-    print(f"args.json → {args_path}" + ("" if written else "  (kept — already existed)"))
-    print(f"upstream  → {VENDOR}")
-    if not env.exists():
-        print(f"\nconnectors: copy {VENDOR / '.env.template'} to {env} and fill in the OpenReview\n"
-              f"user/password (+ a Semantic Scholar key). Without them those connectors are skipped\n"
-              f"and Phase 0 loses the in-review window. Verify with:\n"
-              f"  python3 {VENDOR / 'skills/idea_spark/scripts/run.py'} check_connectors")
-    print("\nthen fill in `direction` in args.json and launch the `ideaspark` workflow with it.")
+    print(f"workflow  -> {wf_dir / 'ideaspark.workflow.js'}")
+    print(f"skill     -> {skill_dst / 'SKILL.md'}")
+    print(f"commands  -> {cmd_dir}: " + ", ".join("/" + c.stem for c in sorted(cmd_dir.glob("*.md"))))
+    print(f"args.json -> {args_path}" + ("" if written else "  (kept — already existed)"))
+    print(f"upstream  -> {VENDOR}")
+    print(f"retrieval -> {a.retrieval_mode}")
+
+    if a.retrieval_mode == "upstream":
+        env = VENDOR / ".env"
+        if not env.exists():
+            print(
+                f"\nupstream connector mode: copy {VENDOR / '.env.template'} to {env} and fill in "
+                "the connector credentials, then verify with:\n"
+                f"  python3 {VENDOR / 'skills/idea_spark/scripts/run.py'} check_connectors"
+            )
+    else:
+        print("\nnative mode uses Claude host Web/GitHub tools for remote retrieval; connector credentials are optional.")
+
+    print("then fill in `direction` if needed and run /research-harness:spark <slug>.")
     return 0
 
 

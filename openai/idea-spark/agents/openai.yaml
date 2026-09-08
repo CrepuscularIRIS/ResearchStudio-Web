@@ -1,0 +1,10 @@
+interface:
+  display_name: ResearchStudio IdeaSpark
+  short_description: ResearchStudio ideation with native web, GitHub, and Files retrieval
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
