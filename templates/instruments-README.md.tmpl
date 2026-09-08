@@ -1,7 +1,0 @@
-# Instruments — <PROJECT>
-
-Env flags: `--setenv=CANARY_EXPECTED=<clean number the SMOKE phase must reproduce> --setenv=CANARY_TOL=0.1`.
-
-`precheck.py` parses the line above (it needs two numbers: `CANARY_EXPECTED=<float> --setenv=CANARY_TOL=<float>`); `launch_wrap.sh`
-exits 3 (canary_fail, never a verdict) when the smoke run misses it. Put the frozen host's evaluation gate here and list the result-file
-keys the spec's `verdict_rule.keep_if_all` may read (the Brain's Phase 6 spec seat reads this file through the repository intake).

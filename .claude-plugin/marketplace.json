@@ -7,7 +7,7 @@
     {
       "name": "research-harness",
       "source": ".",
-      "description": "V9: Brain workflow (idea cards + evidence plan + B1 specs) \u2192 main-window exp-* skill chain driven by next.py / /exp-auto."
+      "description": "ResearchStudio idea_spark, replicated 1:1 as one workflow: a research direction in, one idea card out."
     }
   ]
 }
