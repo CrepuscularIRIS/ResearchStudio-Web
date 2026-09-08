@@ -1,7 +1,7 @@
 {
   "name": "research-harness",
-  "version": "0.8.0",
-  "description": "ResearchStudio idea_spark on two native-tool surfaces. Claude Code keeps the isolated-seat workflow and adds a host adapter that uses native Web/GitHub retrieval for Phase 0 and Phase 3.1 with an upstream Python-connector fallback. OpenAI ships one prompt-preserving Skill for ChatGPT and Codex with GitHub, web, and Files retrieval plus deterministic Python state/validation helpers.",
+  "version": "0.9.0",
+  "description": "Three keepers on one main: the ResearchStudio idea_spark isolated-seat workflow with its native-retrieval host adapter (running on the vendored idea_spark engine), the four ARIS contract skills (experiment-audit, experiment-plan, kill-argument, result-to-claim) with their shared references, and the prompt-preserving OpenAI Skill for ChatGPT and Codex.",
   "author": {
     "name": "CrepuscularIRIS"
   },

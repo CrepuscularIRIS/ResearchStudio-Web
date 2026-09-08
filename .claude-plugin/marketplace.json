@@ -7,7 +7,7 @@
     {
       "name": "research-harness",
       "source": ".",
-      "description": "ResearchStudio idea_spark with a Claude Code isolated-seat workflow plus native Web/GitHub retrieval, and a prompt-preserving OpenAI Skill for ChatGPT/Codex."
+      "description": "Three keepers: the idea_spark isolated-seat workflow with native retrieval, the four ARIS contract skills, and the OpenAI Skill for ChatGPT/Codex."
     }
   ]
 }
