@@ -22,8 +22,12 @@ is an isolated agent; every artifact lives on disk.
    runs inside a zone (`~/ccf`, `~/icml`, `~/imcl`, `~/linxiao`). Never touch another zone's runs.
 2. `RUN_ROOT=$PWD/ideaspark_run/<slug>` — slug = short kebab of the direction. If the dir exists
    this is a RESUME: skip to Phase C, everything re-derives from disk.
-3. Dispatch the local track — Workflow tool, `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/ideaspark.workflow.js`,
-   args `{root: RUN_ROOT, rs_home: /home/lingxufeng/.claude/plugins/marketplaces/research-harness/vendor/researchstudio, direction: "<the direction>", k: 1}`.
+3. Dispatch the local track — Workflow tool, `scriptPath: ${CLAUDE_PLUGIN_ROOT}/workflows/rs.workflow.js`,
+   args `{root: RUN_ROOT, direction: "<the direction>", rs_home: /home/lingxufeng/.claude/plugins/marketplaces/research-harness/vendor/researchstudio}`.
+   This is ONE persistent GLM main agent that walks the navigator loop to the end (the RS-native
+   host shape), spawning every phase as an Opus5 subagent and the mechanical steps as GLM seats.
+   FALLBACK: if the driver reports it cannot spawn nested seats, re-dispatch on
+   `.claude/workflows/ideaspark.workflow.js` with the same args (the seat-per-step build).
    Then keep working; the completion notification finds you.
 
 ## Phase C — the web track (runs UNDER the local track)
