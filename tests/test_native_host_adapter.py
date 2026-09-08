@@ -82,6 +82,10 @@ class ProductSurfaceContract(unittest.TestCase):
         self.assertIn("scripts/openai/build_skill.py", text)
         self.assertNotIn("scripts/web/web.py", text)
 
+    def test_spark_command_keeps_required_name_frontmatter(self):
+        text = SPARK.read_text()
+        self.assertIn("name: spark", text.split("---", 2)[1])
+
     def test_plugin_metadata_drops_playwright(self):
         text = PLUGIN.read_text()
         self.assertNotIn("playwright", text.lower())
