@@ -60,6 +60,8 @@ const DRIVER = [
 '  - "fable" (= claude-opus-5, Opus5): EVERY reasoning seat — 0.4 partition, 0.5 coverage, the',
 '    generation mega-seat (below), 2.3 coherence, 3.2 audit, 3.3, recheck, reaudit, 4.fill,',
 '    fill_fix, 4.1.5, failure cards.',
+'  - "opus" (= glm-5.3[1m], GLM fast tier): ONLY the mechanical seats — pattern_summary tagging',
+'    (ONE call at any paper count), 4.derive, tag-admitted-host-refs.',
 '',
 'STAGE GROUPING — the persistent multi-stage Opus context, sanctioned by RS\'s own criterion',
 '(design-notes: "the call-separation rule protects ADVERSARIAL surfaces"; 2.1+2.2 already share',
@@ -81,8 +83,6 @@ const DRIVER = [
 '  (author vs skeptical implementer), recheck (a bounded fresh second opinion). On RETRY or',
 '  RESUME paths (phase1 output already exists) there is no grouping — one seat per emit.',
 
-'  - "opus" (= glm-5.3[1m], GLM fast tier): ONLY the mechanical seats — pattern_summary tagging',
-'    (ONE call at any paper count), 4.derive, tag-admitted-host-refs.',
 '',
 'THE ONE INLINE STEP — queries: when the emit STEP is "produce queries FIRST", YOU write the 4',
 'search queries yourself (read ' + ENGINE + '/references/intent-recognition.md, Map mode, include one',
