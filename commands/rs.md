@@ -12,7 +12,7 @@ clock, consolidate at the end, and fire the judges. You never reason inside a tr
 is an isolated agent; every artifact lives on disk.
 
     /rs <direction>
-      ├─ local track   Workflow(ideaspark.workflow.js)  → GLM main + serial Opus5 → idea cards (NO scoring inside)
+      ├─ local track   Workflow(rs.workflow.js)  → ONE persistent GLM main agent → Opus5 seats → idea cards (NO scoring inside)
       ├─ web track     web.py watch → seed → chatgpt.com windows → patrol/capture (canvas = the card)
       └─ finish        consolidate all cards → Workflow(webjudge.workflow.js, {cards}) → Opus5∥Sol∥K3 ranking
 
