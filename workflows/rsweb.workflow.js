@@ -70,8 +70,10 @@ const SEND = COMMON + '\n\nMODE = send — dispatch everything the run is due:\n
 
 const PATROL = COMMON + '\n\nMODE = patrol — one pass over the due windows:\n' + [
 '1. Run the script\'s patrol (rc 2 = windows due; it sweeps BOTH batches and prints which).',
-'2. For each due id: browser_tabs list (indices shift; re-list before every select) -> select',
-'   its tab -> browser_evaluate this exact capture:\n' + BROWSER_CAPTURE + '\n',
+'2. For each due id: read its conversation_url from the manifest (the candidate batch lives in',
+'   web/candidate_manifest.json, the gap batch in web/manifest.json). browser_tabs list, match the',
+'   tab whose URL equals it (indices shift; never select by index alone); if NO tab matches, open',
+'   a new tab AT that URL and wait for it to load. Then browser_evaluate this exact capture:\n' + BROWSER_CAPTURE + '\n',
 '3. If the capture is complete (marker + not streaming + copy button): Write the text VERBATIM to',
 '   web/answers/<id>.md (gap batch) or web/candidate_answers/<id>.md (candidate batch), then',
 '   mark --id <id> --done (+ --candidate for the candidate batch).',
