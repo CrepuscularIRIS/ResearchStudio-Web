@@ -27,7 +27,7 @@ is an isolated agent; every artifact lives on disk.
    This is ONE persistent GLM main agent that walks the navigator loop to the end (the RS-native
    host shape), spawning every phase as an Opus5 subagent and the mechanical steps as GLM seats.
    FALLBACK: if the driver reports it cannot spawn nested seats, re-dispatch on
-   `.claude/workflows/ideaspark.workflow.js` with the same args (the seat-per-step build).
+   `.claude/workflows-archive/ideaspark.workflow.js` with the same args (the archived seat-per-step build).
    Then keep working; the completion notification finds you.
 
 ## Phase C — the web track (runs UNDER the local track; you only DISPATCH)
