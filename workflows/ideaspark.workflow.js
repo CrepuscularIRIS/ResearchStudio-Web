@@ -3526,7 +3526,11 @@ function decide(S, rd) {
   const blockingLine = S.p23.blocking_file
     ? bf + '  (the 2.3 gate\'s blocking findings — a self-contained executed-evidence slice; disposition each one)'
     : '2.3 unrepaired BLOCKING findings (verbatim, inline fallback): ' + S.p23.blocking_text.join(' | ')
-  const auditInputs = () => [canonical, p2s, p0 + '/lit_table.md']
+  // The web track may have landed independent reviews of this candidate (GPT-web windows,
+  // seeded the moment 2.2 wrote the candidate — see web.py seed --from-candidate). They are
+  // ordinary INPUTS when present and silently absent otherwise; the seat dispositions them.
+  const auditInputs = () => [canonical, p2s, p0 + '/lit_table.md',
+    d + '/web/candidate_answers/  (web-track reviews of this candidate — read every *.md in this directory IF it exists and DISPOSITION each attack the way NOTES says: uphold, or refute by naming a concrete modeling/arithmetic flaw. A missing or empty directory means no web reviews landed; proceed without comment)']
     .concat(S.p23.blocking_n ? [blockingLine] : [])
     .concat([hits, BANK.anti_patterns.path + '  (inlined above — do not Read)', SUBPAT + '/<each cited C##>.md'])
   const dispositionNote = ' The report MUST contain blocking_findings_disposition[] with one entry per blocking finding (refute only via a concrete modeling/arithmetic flaw); while any entry is upheld, advance is forbidden.'
