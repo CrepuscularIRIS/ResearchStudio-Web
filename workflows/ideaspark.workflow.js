@@ -3526,11 +3526,12 @@ function decide(S, rd) {
   const blockingLine = S.p23.blocking_file
     ? bf + '  (the 2.3 gate\'s blocking findings — a self-contained executed-evidence slice; disposition each one)'
     : '2.3 unrepaired BLOCKING findings (verbatim, inline fallback): ' + S.p23.blocking_text.join(' | ')
-  // The web track may have landed independent reviews of this candidate (GPT-web windows,
-  // seeded the moment 2.2 wrote the candidate — see web.py seed --from-candidate). They are
-  // ordinary INPUTS when present and silently absent otherwise; the seat dispositions them.
+  // The web track may have landed bottleneck-analysis cards (GPT-web windows, one structural
+  // bottleneck / open gap per window, seeded the moment 2.2 wrote the candidate — see
+  // web.py seed --from-candidate). They are ordinary INPUTS when present, silently absent
+  // otherwise; the seat dispositions whatever bears on this candidate.
   const auditInputs = () => [canonical, p2s, p0 + '/lit_table.md',
-    d + '/web/candidate_answers/  (web-track reviews of this candidate — read every *.md in this directory IF it exists and DISPOSITION each attack the way NOTES says: uphold, or refute by naming a concrete modeling/arithmetic flaw. A missing or empty directory means no web reviews landed; proceed without comment)']
+    d + '/web/candidate_answers/  (web-track bottleneck-analysis cards — read every *.md in this directory IF it exists. Any card that challenges this candidate’s diagnosis, premises, or mechanism must be DISPOSITIONED the way NOTES says: uphold, or refute by naming a concrete modeling/arithmetic flaw. A missing or empty directory means no web cards landed; proceed without comment)']
     .concat(S.p23.blocking_n ? [blockingLine] : [])
     .concat([hits, BANK.anti_patterns.path + '  (inlined above — do not Read)', SUBPAT + '/<each cited C##>.md'])
   const dispositionNote = ' The report MUST contain blocking_findings_disposition[] with one entry per blocking finding (refute only via a concrete modeling/arithmetic flaw); while any entry is upheld, advance is forbidden.'
