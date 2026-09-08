@@ -1,4 +1,5 @@
 ---
+name: init
 description: Set up one idea-spark run — install the workflow and write args.json
 argument-hint: "<topic-slug> [research direction]"
 ---

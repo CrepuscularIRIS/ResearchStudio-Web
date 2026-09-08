@@ -1,4 +1,5 @@
 ---
+name: dual
 description: Fire both tracks on one run root — the local workflow, then the web windows the moment a bottleneck exists
 argument-hint: "<topic-slug>"
 ---

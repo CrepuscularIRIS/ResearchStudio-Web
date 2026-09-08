@@ -1,6 +1,6 @@
 {
   "name": "research-harness",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "ResearchStudio idea_spark on two tracks. Local: one Claude Code workflow replicating the upstream pipeline 1:1 \u2014 phase graph ported to JS, all 11 system prompts packed byte-for-byte, upstream's run.py for every deterministic step, and a differential test asserting the same next step as upstream's navigator on 52 fixtures. Web: a skill that drives the hosted IdeaSpark on chatgpt.com through the playwright extension, 1-5 conversations in parallel, seeded from a direction or from a finished local run, captured only when provably complete. Same judge scores both.",
   "author": {
     "name": "CrepuscularIRIS"

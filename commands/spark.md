@@ -1,4 +1,5 @@
 ---
+name: spark
 description: Run the idea-spark pipeline on a prepared run directory
 argument-hint: "<topic-slug>"
 ---

@@ -1,4 +1,5 @@
 ---
+name: patrol
 description: One sweep across every run root in this project — what needs sending, what needs checking, what is overdue
 argument-hint: ""
 ---

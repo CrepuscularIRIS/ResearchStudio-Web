@@ -1,4 +1,5 @@
 ---
+name: web
 description: Ask the hosted IdeaSpark the same question on chatgpt.com, 1-5 windows in parallel
 argument-hint: "<topic-slug> [--from-run | \"<research direction>\"] [--n 3]"
 ---
