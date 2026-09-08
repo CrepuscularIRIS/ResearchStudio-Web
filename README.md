@@ -1,155 +1,134 @@
 # research-harness
 
-Microsoft ResearchStudio's `idea_spark` skill, on two tracks. A research direction in, a
-reviewer-defensible idea card out.
+Microsoft ResearchStudio `idea_spark`, adapted for two supported host surfaces while keeping the
+research-reasoning contracts intact:
 
-- **Local** — one Claude Code workflow, a 1:1 replica of the upstream pipeline rather than a
-  re-interpretation of it. Every gate runs; hours; reproducible and auditable.
-- **Web** — a skill that asks the hosted IdeaSpark the same question on `chatgpt.com` through the
-  playwright extension, up to five conversations in parallel. 30–60 minutes, and far more
-  literature behind the answer.
+- **Claude Code** — the existing isolated-seat workflow remains the phase executor. `/spark` now uses a
+  native-retrieval host adapter: Claude WebSearch/WebFetch and an available GitHub MCP/connector handle
+  Phase 0 and Phase 3.1; every other phase still runs in the original fresh workflow seat. Set
+  `retrieval_mode=upstream` to reproduce the old Python-connector path.
+- **OpenAI (ChatGPT + Codex)** — `openai/idea-spark/` is the shared Skill source. It routes repository
+  evidence to the GitHub connector/app, scholarly evidence to native web search, user materials to Files,
+  and reserves Python for deterministic state/merge/validation/rendering work.
 
-Neither replaces the other, and the same judge scores both.
+A research direction goes in; one reviewer-defensible, implementable idea card comes out (or the same
+ResearchStudio terminal failure states).
 
-```
-/init   <slug> "<one sentence: the research direction>"   # sets the project up
-/dual   <slug>            # ← the dual-track trigger: local workflow, then web windows on the bottleneck
-/patrol                   # one sweep over every run root: what needs sending, checking, or is overdue
-/spark  <slug>            # local track only
-/web    <slug>            # web track only
-```
+## Prompt and runtime guarantees
 
-`init` installs the workflow, the web-track skill, `web.py`, **and these commands** into the
-project's own `.claude/`, with the plugin-root placeholder resolved — so they work whether or not
-this plugin is enabled as a plugin. Everything is project-local; nothing lands in `~/.claude`.
+The vendored upstream lives at `vendor/researchstudio/` and is the source of truth. The eleven
+ResearchStudio system prompts are never rewritten. The OpenAI package builder verifies byte identity
+against the vendor before it will produce an archive, and overlays the exact vendored C00-C30
+sub-pattern cards into the upload so the final Skill is self-contained.
 
-Three cards land in `ideaspark_run/<slug>/phase4/`: plain Chinese, plain English, and the
-reviewer version. Or `do_not_generate.md` when the direction cannot be grounded, or
-`phase_3_failed.md` when the idea died in the gauntlet and the retry budget ran out. Those
-are the only three outcomes, and they are upstream's.
+Claude Code retains the strongest isolation guarantee in this repository: each reasoning phase is an
+independent workflow seat with fresh context. The native host adapter only intercepts retrieval-heavy
+steps and drives the already-tested workflow one step at a time (`max_steps=1`), so the existing phase
+graph and deterministic gates are unchanged.
 
-## What "1:1" means here, and how it is checked
+ChatGPT/Codex keep prompt parity and phase-input discipline, but ChatGPT Web does not guarantee
+process-level fresh-context isolation. Do not describe the OpenAI path as runtime-identical to the Claude
+workflow. It is a prompt-preserving, native-tool host port.
 
-The upstream skill is a phase graph (`scripts/next_step.py`) plus eleven system prompts. A
-host is supposed to run its navigator, do what each emit says in an isolated context, and
-loop. This plugin replaces the *host*, not the pipeline:
+## Claude Code
 
-| | |
-|---|---|
-| **Prompts** | The 11 system prompts and 8 rubrics are packed into the workflow **byte for byte** by `scripts/ideaspark_src/gen.py`. A seat receives the verbatim contract plus ~1.6 KB of frame (you are a fresh sub-agent; these are your tools; write this file once). Nothing about goals, repositories or house style is appended — a test forbids the words. |
-| **Logic** | The phase graph is ported to JS (`decide()`), driven by a read-only python probe that prints one JSON snapshot of the run directory. No text emit is parsed. Every deterministic step still runs upstream's own `run.py` subcommand. |
-| **Proof** | A differential test feeds 52 layered run-directory fixtures to *both* upstream's `next` and `decide()` and asserts they pick the same step — every reachable node of the graph, including the bounded audit bounces, the information-gain retry ladder, the broken-gate terminal, and both Phase 0 env switches. **57/57.** |
+Initialize and run as before:
 
-The gates come with it, because they are the pipeline: the mandatory full-text gate, the
-citation gate, the executed dry-run at 2.3, the blocking-evidence disposition guard, the
-kill-switch byte-identity check, the retry budget, and the nine validators before render.
-
-## What was changed on purpose
-
-Four deviations, each declared and each tested:
-
-1. **Per-seat model routing.** Upstream has two tiers (a host reasoning model and a fast
-   classifier) and forbids downgrading the open-ended steps. This plugin routes each seat to
-   a named model instead — Opus for every large/open-ended seat, GLM for the two mechanical
-   ones and the host-level chores, and a three-model panel where a panel helps. The upstream
-   tier is kept in the seat table as a `tier` field and a test asserts the mapping still
-   honours "never downgrade an open-ended step".
-2. **Phase 0.5 coverage check runs three judges** (Opus, Sol, K3) and unions their nominations
-   instead of one. Every nomination is still connector-verified before admission, so a wider
-   net cannot admit an unverified paper; the union is capped at 16 and drops are logged.
-3. **A scoring stage after the cards**, using the suite's own `evaluation/idea_quality` skill:
-   three independent judges, absolute plus blind pairwise, then a deterministic aggregate that
-   surfaces where they disagree.
-4. **One retry per seat** in a fresh context when the first attempt returns nothing.
-
-Pattern tagging fans out to 2–3 parallel shards above 40 papers. That is not a deviation —
-upstream sanctions it explicitly and its own validating merger rejects the whole set if a row
-is malformed, the row count is wrong, or a paper is missing.
-
-## The web track
-
-`skills/ideaspark-web/` drives `chatgpt.com`. The prompt opens with the trigger line
-`@ResearchStudio IdeaSpark Use IdeaSpark.` followed by the intake, one field per line, and ends
-with a marker line the skill adds:
-
-```
-@ResearchStudio IdeaSpark Use IdeaSpark.
-Target system: PhyAgentOS.
-Research direction: long-horizon agents suffer from context growth and unreliable memory
-  retrieval. I want a method that makes memory selection causally relevant to future tool decisions.
-Contribution type: method.
-Compute budget: 8×H100.
-End your answer with the single line <<END OF IDEA CARD>> and nothing after it.
+```text
+/research-harness:init  <slug> "<one sentence: the research direction>"
+/research-harness:spark <slug>
 ```
 
-The marker is what turns "is it finished?" into a fact. An answer counts as captured only when the
-marker is present, nothing is streaming, the turn carries its copy button, and the text stopped
-growing across two polls — **a truncated capture is an unfinished answer, never a short one**.
-Chats are persistent, one question per window, and the conversation URL goes in the manifest,
-because that URL is the audit trail.
+`/spark` reads `ideaspark_run/<slug>/args.json`. With no `retrieval_mode`, native mode is used.
 
-### The standing loop
+Native mode follows this host loop:
 
-The two tracks are joined at the bottleneck, not at the finish line. The local run writes its
-diagnosis at Phase 1, long before any card exists — that is the moment to ask the web the same
-question. Two read-only commands say whether anything needs doing:
+1. Run vendored `scripts/run.py next` read-only.
+2. If the next state is fresh Phase 0, use native WebSearch/WebFetch plus GitHub MCP/connector when a
+   repository/system is under study, then materialize the canonical Phase 0 artifacts.
+3. If the next state is Phase 3.1 collision, run the signature/alias scholarly search natively and write
+   the canonical collision artifacts.
+4. Otherwise invoke the existing `ideaspark` workflow with `max_steps=1` so the reasoning step happens in
+   its normal fresh isolated seat.
+5. Repeat until terminal.
+
+To force the historical connector behavior, put this in the run `args.json`:
+
+```json
+{"retrieval_mode": "upstream"}
+```
+
+The Claude adapter is documented in `skills/ideaspark-native/SKILL.md`. It treats GitHub repositories as
+systems under study, not as generic code-review targets. Repo code/issues/PRs/commits can establish
+implementation facts and bottlenecks; scholarly novelty is still decided from literature.
+
+## ChatGPT + Codex Skill
+
+The source is `openai/idea-spark/`. Its routing priority is:
+
+1. GitHub connector/app for repository metadata, code, issues, PRs, commits, and system-under-study facts.
+2. Native web search for papers, venue pages, publisher pages, documentation, and collision retrieval.
+3. Files for user-supplied papers, notes, PDFs, and project material.
+4. Python only for deterministic state inspection, JSON merge/patch, validation, assembly, and rendering.
+
+Remote-retrieval commands in the upstream runbook are interpreted as capability requests on OpenAI hosts;
+`phase0`, full-text/top-up resolution, and `phase3_collision` are fulfilled with native tools rather than
+`scripts/search_*.py`.
+
+Build the installable archive from the repository root:
 
 ```bash
-python3 scripts/web/web.py watch  --root <run_root>   # exit 2: a bottleneck nobody has asked about
-python3 scripts/web/web.py patrol --root <run_root>   # exit 2: a window is due, or overdue
+python3 scripts/openai/build_skill.py
 ```
 
-`watch` fingerprints the bottleneck statement plus the gap list, so a re-run that keeps the same
-diagnosis does not re-ask. `seed --from-run` then turns each unaddressed gap into its own window
-and carries the audit's paper-pointed threat in as a differentiation constraint.
+Output:
 
-`patrol` owns the clock: **30-minute interval, overdue at 90**, because a hosted answer takes
-30–60 minutes and watching one stream is a waste of a session. Send, stamp, leave, come back.
-`mark --sent/--poll/--done` is how the browser side writes to that clock; `--done` is only legal
-with the end marker actually present.
-
-Both commands are idempotent and read-only, so they are equally safe on a timer, from a fresh
-session, or by hand. When both exit 0 there is nothing to do.
-
-## Requirements
-
-- For the local track, a `claude-kimi` session. The seat table pins model ids (`claude-opus-5`, `glm-5.3[1m]`,
-  `k3-256k`, `gpt-5.6-sol`) that resolve on a local LiteLLM route. On the official Anthropic
-  API those ids do not exist and the session model is served instead, silently.
-- `python3` with `feedparser openreview-py beautifulsoup4 pymupdf` (upstream's connectors and
-  full-text fetch). Optional: `xelatex` or `tectonic` for the PDF cards.
-- For the web track, the `playwright-extension` MCP connected to a browser already signed in to
-  ChatGPT. The skill never signs in, never clicks through account dialogs, and never pastes local
-  file contents into the chat.
-- Connector credentials: copy `vendor/researchstudio/.env.template` to `.env` **beside it** and
-  fill in the OpenReview user/password and a Semantic Scholar key. `run.py` walks up from the
-  skill directory and stops at the first `.env` it finds, so keep them in one file — a second
-  `.env` deeper in the tree shadows it and the connector is skipped without an error.
-
-## Layout
-
-```
-workflows/ideaspark.workflow.js     the local track (generated — edit the source, not this)
-scripts/ideaspark_src/              logic + generator; `python3 gen.py` rebuilds the workflow
-skills/ideaspark-web/               the web track: trigger format, browser protocol, completion rule
-scripts/web/web.py                  seeds the web prompts, indexes the captures
-vendor/researchstudio/              upstream idea_spark + idea_quality, MIT, unmodified
-tests/                              differential test, fixtures, selftest.sh
-commands/                           /init, /dual, /patrol, /spark, /web
+```text
+dist/openai/skill.zip
 ```
 
-`tests/selftest.sh` runs everything: generator round-trip, byte-identical prompts, the
-differential test, probe purity, and an install into a scratch project. No model calls, no
-network.
+Upload that `skill.zip` to ChatGPT Skills, or unpack/install the same Skill for Codex. The builder refuses
+prompt drift, rejects `.env`/cache files, and replaces any compact C00-C30 source pointers with the exact
+vendored ResearchStudio cards before zipping.
 
-## Upgrading the upstream
+## Repository layout
 
-Replace `vendor/researchstudio/`, re-run `python3 scripts/ideaspark_src/gen.py`, then
-`tests/selftest.sh`. If upstream moved the phase graph, the differential test says so
-immediately and names the fixture where the two disagree.
+```text
+workflows/ideaspark.workflow.js     existing Claude isolated-seat phase executor (unchanged)
+scripts/ideaspark_src/              existing workflow source/generator (unchanged)
+skills/ideaspark-native/            Claude native-retrieval host adapter
+commands/spark.md                   Claude host loop entrypoint
+openai/idea-spark/                  ChatGPT/Codex Skill source
+scripts/openai/build_skill.py       build + integrity-check dist/openai/skill.zip
+vendor/researchstudio/              pinned upstream IdeaSpark + idea_quality, unmodified
+tests/                              original differential suite + native/OpenAI adapter contracts
+```
+
+The former Playwright path that drove `chatgpt.com` from Claude Code is removed. ChatGPT is now a direct
+OpenAI Skill surface rather than a browser-automation target.
+
+## Existing ResearchStudio guarantees
+
+The original workflow still carries the mandatory full-text gate, citation gate, Phase 2.3 executed
+coherence trace, blocking-evidence disposition guard, information-gain retry ladder, falsification
+re-audit, Phase 4 implementability audit, and final validators. The existing differential suite remains
+the guard that the Claude workflow phase graph agrees with the vendored ResearchStudio navigator.
+
+## Tests
+
+Run the repository test suite:
+
+```bash
+tests/selftest.sh
+```
+
+The native/OpenAI contract tests can also be run directly:
+
+```bash
+python3 -m unittest -v tests/test_native_host_adapter.py tests/test_openai_skill.py
+```
 
 ## Licence
 
-This plugin: MIT. `vendor/researchstudio/` is an unmodified copy of
-[microsoft/ResearchStudio](https://github.com/microsoft/ResearchStudio) at commit `0597891`,
-redistributed under its own MIT licence — see `vendor/researchstudio/PROVENANCE.md`.
+This plugin: MIT. `vendor/researchstudio/` is the pinned, unmodified Microsoft ResearchStudio material
+redistributed under its upstream MIT licence; see `vendor/researchstudio/PROVENANCE.md`.
