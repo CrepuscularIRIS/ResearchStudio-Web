@@ -1,4 +1,5 @@
 {
+  "$schema": "https://www.schemastore.org/claude-code-marketplace.json",
   "name": "researchstudio-web",
   "owner": {
     "name": "CrepuscularIRIS"
@@ -10,15 +11,10 @@
   "plugins": [
     {
       "name": "researchstudio-web",
-      "description": "ResearchStudio IdeaSpark for web-search hosts: idea-spark, paper-search, scoop-check and idea-quality. A prompt-preserving port of microsoft/ResearchStudio whose only retrieval transport is web search \u2014 no API keys, no connectors, no local corpus.",
+      "description": "ResearchStudio IdeaSpark for web-search hosts: idea-spark, paper-search, scoop-check and idea-quality. A prompt-preserving port of microsoft/ResearchStudio whose only retrieval transport is web search — no API keys, no connectors, no local corpus.",
       "source": "./",
-      "strict": true,
-      "skills": [
-        "./skills/idea-spark",
-        "./skills/paper-search",
-        "./skills/scoop-check",
-        "./skills/idea-quality"
-      ]
+      "version": "1.0.0",
+      "category": "research"
     }
   ]
 }
