@@ -256,7 +256,10 @@ def build_skill(skill_dir: Path, repo: Path, commit: str, make_zip: bool) -> Pat
         for item in sorted(pkg.rglob("*")):
             if item.is_file():
                 zf.write(item, Path(manifest.name) / item.relative_to(pkg))
-    logger.info("  wrote %s (%.0f KB)", out, out.stat().st_size / 1024)
+    # Also ship a .zip copy: some upload surfaces filter on the extension, and
+    # a user who cannot upload the file is not helped by it being correctly built.
+    shutil.copy2(out, out.with_suffix(".zip"))
+    logger.info("  wrote %s (+ .zip copy, %.0f KB)", out, out.stat().st_size / 1024)
     return out
 
 

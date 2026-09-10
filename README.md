@@ -16,7 +16,15 @@ No API keys. No connectors. No local corpus. No `pip install`.
 ## Install
 
 **claude.ai** — Settings → Capabilities → Skills → Upload skill, then pick a
-file from [`dist/`](dist/). Each `.skill` is independent.
+file from [`dist/`](dist/). Each package ships twice, as `.skill` and as `.zip`
+(identical bytes) because upload surfaces differ on which extension they
+accept. Each one is independent of the others.
+
+Direct downloads:
+[idea-spark](https://raw.githubusercontent.com/CrepuscularIRIS/ResearchStudio-Web/main/dist/idea-spark.zip) ·
+[paper-search](https://raw.githubusercontent.com/CrepuscularIRIS/ResearchStudio-Web/main/dist/paper-search.zip) ·
+[scoop-check](https://raw.githubusercontent.com/CrepuscularIRIS/ResearchStudio-Web/main/dist/scoop-check.zip) ·
+[idea-quality](https://raw.githubusercontent.com/CrepuscularIRIS/ResearchStudio-Web/main/dist/idea-quality.zip)
 
 **Claude Code** — add this repo as a plugin marketplace:
 
@@ -24,6 +32,13 @@ file from [`dist/`](dist/). Each `.skill` is independent.
 /plugin marketplace add CrepuscularIRIS/ResearchStudio-Web
 /plugin install researchstudio-web
 ```
+
+> **Upgrading from `research-harness`?** This repo was renamed. A marketplace
+> entry added under the old name syncs the new manifest, sees a different
+> `name`, and fails with *"Marketplace sync failed. Check the repository URL
+> and try again."* — the URL is fine; the stale entry is not. Remove it
+> (`/plugin marketplace remove research-harness`) and add this one. The same
+> stale entry can exist separately on claude.ai/code; remove it there too.
 
 **ChatGPT / Codex** — the sibling port lives in [`openai/`](openai/), packaged
 the same way with its own host adapter.
