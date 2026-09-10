@@ -43,6 +43,24 @@ Direct downloads:
 **ChatGPT / Codex** — the sibling port lives in [`openai/`](openai/), packaged
 the same way with its own host adapter.
 
+## Checking a build
+
+```bash
+python3 claude/check.py
+```
+
+Six checks, each one something that has actually broken here: the marketplace
+manifest against the [published JSON Schema](https://www.schemastore.org/claude-code-marketplace.json),
+components declared in exactly one place (plugin.json OR the entry's `skills[]`,
+never both), every skill's frontmatter inside claude.ai's limits, every
+package's upstream-prompt parity, no secret material, and `claude plugin
+validate`.
+
+**If a marketplace add fails**, run this first — then run the same add against a
+known-good public marketplace (say `anthropics/skills` or `ayghri/i-have-adhd`).
+If that fails too, the problem is the host's GitHub access or a stale entry on
+that host, not this repo.
+
 ## What "prompt-preserving" means here
 
 The eleven reasoning system prompts, the ideation taxonomy, the C00-C30
