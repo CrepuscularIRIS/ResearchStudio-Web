@@ -1,0 +1,6 @@
+{
+  "name": "scoop-check",
+  "upstream_root": "ResearchStudio-Idea/skills/scoop_check",
+  "vendor": [],
+  "upstream_skill_md_to": "references/upstream/SKILL.md"
+}

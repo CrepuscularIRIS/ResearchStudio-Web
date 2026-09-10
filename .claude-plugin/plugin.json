@@ -1,23 +1,24 @@
 {
-  "name": "research-harness",
-  "version": "0.9.0",
-  "description": "Three keepers on one main: the ResearchStudio idea_spark isolated-seat workflow with its native-retrieval host adapter (running on the vendored idea_spark engine), the four ARIS contract skills (experiment-audit, experiment-plan, kill-argument, result-to-claim) with their shared references, and the prompt-preserving OpenAI Skill for ChatGPT and Codex.",
+  "name": "researchstudio-web",
+  "version": "1.0.0",
+  "description": "The ResearchStudio Idea skills, ported to run anywhere web search is available: idea-spark (research direction to one reviewer-defensible idea card), paper-search, scoop-check (prior-art collision) and idea-quality (score an idea at the idea stage). The eleven reasoning system prompts are vendored byte-for-byte from a pinned microsoft/ResearchStudio commit and verified by verify_parity.py; retrieval is web search only, which is upstream's own lit_grounding_mode=webfallback made first-class. The same packages ship as .skill files for claude.ai in dist/.",
   "author": {
     "name": "CrepuscularIRIS"
   },
   "license": "MIT",
+  "homepage": "https://github.com/CrepuscularIRIS/ResearchStudio-Web",
   "keywords": [
     "research",
     "idea-generation",
     "researchstudio",
     "idea-spark",
+    "literature-review",
+    "prior-art",
+    "novelty",
     "falsification",
-    "workflow",
-    "native-retrieval",
-    "github",
+    "websearch",
+    "claude-ai",
     "claude-code",
-    "openai",
-    "chatgpt",
-    "codex"
+    "skills"
   ]
 }

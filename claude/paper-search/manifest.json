@@ -1,0 +1,8 @@
+{
+  "name": "paper-search",
+  "upstream_root": "ResearchStudio-Idea/skills/paper_search",
+  "vendor": [
+    "references"
+  ],
+  "upstream_skill_md_to": "references/upstream/SKILL.md"
+}

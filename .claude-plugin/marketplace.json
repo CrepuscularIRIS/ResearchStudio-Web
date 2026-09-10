@@ -1,13 +1,13 @@
 {
-  "name": "research-harness",
+  "name": "researchstudio-web",
   "owner": {
     "name": "CrepuscularIRIS"
   },
   "plugins": [
     {
-      "name": "research-harness",
+      "name": "researchstudio-web",
       "source": ".",
-      "description": "Three keepers: the idea_spark isolated-seat workflow with native retrieval, the four ARIS contract skills, and the OpenAI Skill for ChatGPT/Codex."
+      "description": "ResearchStudio IdeaSpark for web-search hosts: idea-spark, paper-search, scoop-check and idea-quality. A prompt-preserving port of microsoft/ResearchStudio whose only retrieval transport is web search — no API keys, no connectors, no local corpus."
     }
   ]
 }

@@ -1,0 +1,9 @@
+{
+  "name": "idea-spark",
+  "upstream_root": "ResearchStudio-Idea/skills/idea_spark",
+  "vendor": [
+    "references",
+    "scripts"
+  ],
+  "upstream_skill_md_to": "references/upstream/SKILL.md"
+}

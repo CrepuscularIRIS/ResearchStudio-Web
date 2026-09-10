@@ -1,0 +1,11 @@
+{
+  "name": "idea-quality",
+  "upstream_root": "ResearchStudio-Idea/evaluation/idea_quality",
+  "vendor": [
+    "evals"
+  ],
+  "upstream_skill_md_to": "references/upstream/SKILL.md",
+  "shared_references": [
+    "host-runtime.md"
+  ]
+}
